@@ -1,0 +1,18 @@
+{
+  "name": "epos-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hospitality EPoS Platform — Isle of Man & UK",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "api": "npm run dev --workspace=apps/api",
+    "pos": "npm run start --workspace=apps/pos",
+    "backoffice": "npm run dev --workspace=apps/backoffice"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

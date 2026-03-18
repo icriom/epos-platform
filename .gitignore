@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment files — never commit these
+.env
+.env.local
+.env.development
+.env.staging
+.env.production
+
+# Build outputs
+dist/
+build/
+.next/
+
+# Android build
+*.apk
+*.aab
+android/app/build/
+
+# iOS build
+ios/build/
+*.ipa
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/extensions.json
+
+# Docker
+docker-compose.override.yml
