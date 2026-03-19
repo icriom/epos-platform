@@ -1,0 +1,116 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organisation {
+  id                 String    @id @default(uuid())
+  name               String
+  legalName          String
+  vatNumber          String?
+  companyNumber      String?
+  addressLine1       String
+  addressLine2       String?
+  city               String
+  postcode           String
+  country            String    @default("GB")
+  phone              String?
+  email              String
+  logoUrl            String?
+  subscriptionTier   String    @default("TRIAL")
+  subscriptionStatus String    @default("ACTIVE")
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  deletedAt          DateTime?
+  venues             Venue[]
+
+  @@map("organisations")
+}
+
+model Venue {
+  id              String       @id @default(uuid())
+  organisationId  String
+  name            String
+  addressLine1    String
+  addressLine2    String?
+  city            String
+  postcode        String
+  phone           String?
+  email           String?
+  vatNumber       String?
+  logoUrl         String?
+  receiptHeader   String?
+  receiptFooter   String?
+  defaultCurrency String       @default("GBP")
+  timezone        String       @default("Europe/London")
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  deletedAt       DateTime?
+  organisation    Organisation @relation(fields: [organisationId], references: [id])
+  locations       Location[]
+  staff           Staff[]
+  devices         Device[]
+
+  @@map("venues")
+}
+
+model Location {
+  id               String    @id @default(uuid())
+  venueId          String
+  name             String
+  description      String?
+  defaultVatType   String    @default("EAT_IN")
+  serviceChargePct Decimal?
+  isActive         Boolean   @default(true)
+  sortOrder        Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+  venue            Venue     @relation(fields: [venueId], references: [id])
+
+  @@map("locations")
+}
+
+model Staff {
+  id               String    @id @default(uuid())
+  venueId          String
+  firstName        String
+  lastName         String
+  displayName      String
+  email            String?
+  pinHash          String
+  photoUrl         String?
+  isActive         Boolean   @default(true)
+  backOfficeAccess Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+  venue            Venue     @relation(fields: [venueId], references: [id])
+
+  @@map("staff")
+}
+
+model Device {
+  id                String    @id @default(uuid())
+  venueId           String
+  name              String
+  type              String
+  platform          String    @default("ANDROID")
+  model             String?
+  osVersion         String?
+  appVersion        String?
+  lastSeenAt        DateTime?
+  lastSyncAt        DateTime?
+  isOnline          Boolean   @default(false)
+  offlineSince      DateTime?
+  registrationToken String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  venue             Venue     @relation(fields: [venueId], references: [id])
+
+  @@map("devices")
+}
