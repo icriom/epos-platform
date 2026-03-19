@@ -20,10 +20,29 @@ const server = Fastify({
   }
 });
 
+// Register plugins
 server.register(cors, { origin: true });
-server.register(helmet);
+server.register(helmet, { contentSecurityPolicy: false });
+
+// Add content type parser for JSON
+server.addContentTypeParser(
+  'application/json',
+  { parseAs: 'string' },
+  function (req, body, done) {
+    try {
+      const json = JSON.parse(body as string);
+      done(null, json);
+    } catch (err: any) {
+      err.statusCode = 400;
+      done(err, undefined);
+    }
+  }
+);
+
+// Register routes
 server.register(venueRoutes, { prefix: '/api/venues' });
 
+// Health check
 server.get('/health', async () => {
   return {
     status: 'ok',
@@ -33,6 +52,7 @@ server.get('/health', async () => {
   };
 });
 
+// Root
 server.get('/', async () => {
   return {
     name: 'EPoS Platform API',

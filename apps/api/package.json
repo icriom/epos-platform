@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@fastify/cors": "^10.0.0",
+    "@fastify/formbody": "^8.0.2",
     "@fastify/helmet": "^13.0.0",
     "@fastify/jwt": "^9.0.0",
     "@prisma/client": "^5.22.0",
