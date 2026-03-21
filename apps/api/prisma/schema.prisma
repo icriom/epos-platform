@@ -76,20 +76,23 @@ model Location {
 }
 
 model Staff {
-  id               String    @id @default(uuid())
-  venueId          String
-  firstName        String
-  lastName         String
-  displayName      String
-  email            String?
-  pinHash          String
-  photoUrl         String?
-  isActive         Boolean   @default(true)
-  backOfficeAccess Boolean   @default(false)
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-  deletedAt        DateTime?
-  venue            Venue     @relation(fields: [venueId], references: [id])
+  id                String       @id @default(uuid())
+  venueId           String
+  firstName         String
+  lastName          String
+  displayName       String
+  email             String?
+  pinHash           String
+  roleId            String?
+  photoUrl          String?
+  isActive          Boolean      @default(true)
+  backOfficeAccess  Boolean      @default(false)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  deletedAt         DateTime?
+  venue             Venue        @relation(fields: [venueId], references: [id])
+  role              Role?        @relation(fields: [roleId], references: [id])
+  clockEvents       ClockEvent[]
 
   @@map("staff")
 }
@@ -274,4 +277,68 @@ model MenuItemPrice {
   priceLevel   PriceLevel @relation(fields: [priceLevelId], references: [id])
 
   @@map("menu_item_prices")
+}
+
+model Role {
+  id          String       @id @default(uuid())
+  venueId     String?
+  name        String
+  description String?
+  isSystem    Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  staff       Staff[]
+
+  @@map("roles")
+}
+
+model ClockEvent {
+  id        String   @id @default(uuid())
+  staffId   String
+  venueId   String
+  sessionId String?
+  eventType String
+  eventAt   DateTime @default(now())
+  deviceId  String?
+  createdAt DateTime @default(now())
+  staff     Staff    @relation(fields: [staffId], references: [id])
+
+  @@map("clock_events")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  venueId    String
+  staffId    String?
+  deviceId   String?
+  sessionId  String?
+  action     String
+  entityType String?
+  entityId   String?
+  oldValue   Json?
+  newValue   Json?
+  reason     String?
+  createdAt  DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
+model TradingSession {
+  id               String    @id @default(uuid())
+  venueId          String
+  locationId       String?
+  openedBy         String
+  closedBy         String?
+  openedAt         DateTime  @default(now())
+  closedAt         DateTime?
+  status           String    @default("OPEN")
+  cashFloatAmount  Decimal?  @db.Decimal(10, 2)
+  cashDeclared     Decimal?  @db.Decimal(10, 2)
+  cashExpected     Decimal?  @db.Decimal(10, 2)
+  cashVariance     Decimal?  @db.Decimal(10, 2)
+  notes            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@map("trading_sessions")
 }
