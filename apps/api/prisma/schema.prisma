@@ -54,7 +54,7 @@ model Venue {
   locations       Location[]
   staff           Staff[]
   devices         Device[]
-
+  menus   Menu[]
   @@map("venues")
 }
 
@@ -113,4 +113,165 @@ model Device {
   venue             Venue     @relation(fields: [venueId], references: [id])
 
   @@map("devices")
+}
+
+model Menu {
+  id          String         @id @default(uuid())
+  venueId     String
+  name        String
+  description String?
+  isActive    Boolean        @default(true)
+  isDefault   Boolean        @default(false)
+  sortOrder   Int            @default(0)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  deletedAt   DateTime?
+  venue       Venue          @relation(fields: [venueId], references: [id])
+  categories  MenuCategory[]
+  schedules   MenuSchedule[]
+
+  @@map("menus")
+}
+
+model MenuSchedule {
+  id         String   @id @default(uuid())
+  menuId     String
+  locationId String?
+  daysOfWeek String[]
+  startTime  String
+  endTime    String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  menu       Menu     @relation(fields: [menuId], references: [id])
+
+  @@map("menu_schedules")
+}
+
+model MenuCategory {
+  id               String         @id @default(uuid())
+  menuId           String
+  name             String
+  description      String?
+  colour           String?
+  icon             String?
+  sortOrder        Int            @default(0)
+  defaultCourse    String?
+  parentCategoryId String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  deletedAt        DateTime?
+  menu             Menu           @relation(fields: [menuId], references: [id])
+  parentCategory   MenuCategory?  @relation("SubCategories", fields: [parentCategoryId], references: [id])
+  subCategories    MenuCategory[] @relation("SubCategories")
+  items            MenuItem[]
+
+  @@map("menu_categories")
+}
+
+model MenuItem {
+  id              String              @id @default(uuid())
+  venueId         String
+  categoryId      String
+  name            String
+  description     String?
+  pluCode         String
+  barcode         String?
+  basePrice       Decimal             @db.Decimal(10, 2)
+  costPrice       Decimal?            @db.Decimal(10, 2)
+  vatType         String              @default("EAT_IN")
+  vatRate         Decimal             @db.Decimal(5, 2)
+  course          String?
+  kitchenStation  String?
+  prepTimeMins    Int?
+  imageUrl        String?
+  isAvailable     Boolean             @default(true)
+  isArchived      Boolean             @default(false)
+  sortOrder       Int                 @default(0)
+  calories        Int?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  deletedAt       DateTime?
+  category        MenuCategory        @relation(fields: [categoryId], references: [id])
+  allergens       MenuItemAllergen[]
+  modifierGroups  MenuItemModifierGroup[]
+  prices          MenuItemPrice[]
+
+  @@map("menu_items")
+}
+
+model MenuItemAllergen {
+  id         String   @id @default(uuid())
+  menuItemId String
+  allergen   String
+  createdAt  DateTime @default(now())
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@map("menu_item_allergens")
+}
+
+model ModifierGroup {
+  id            String                  @id @default(uuid())
+  venueId       String
+  name          String
+  minSelections Int                     @default(0)
+  maxSelections Int                     @default(1)
+  isRequired    Boolean                 @default(false)
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+  deletedAt     DateTime?
+  options       ModifierOption[]
+  menuItems     MenuItemModifierGroup[]
+
+  @@map("modifier_groups")
+}
+
+model ModifierOption {
+  id              String        @id @default(uuid())
+  modifierGroupId String
+  name            String
+  priceAdjustment Decimal       @default(0) @db.Decimal(10, 2)
+  isAvailable     Boolean       @default(true)
+  sortOrder       Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  modifierGroup   ModifierGroup @relation(fields: [modifierGroupId], references: [id])
+
+  @@map("modifier_options")
+}
+
+model MenuItemModifierGroup {
+  id              String        @id @default(uuid())
+  menuItemId      String
+  modifierGroupId String
+  sortOrder       Int           @default(0)
+  menuItem        MenuItem      @relation(fields: [menuItemId], references: [id])
+  modifierGroup   ModifierGroup @relation(fields: [modifierGroupId], references: [id])
+
+  @@map("menu_item_modifier_groups")
+}
+
+model PriceLevel {
+  id          String          @id @default(uuid())
+  venueId     String
+  name        String
+  description String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  prices      MenuItemPrice[]
+
+  @@map("price_levels")
+}
+
+model MenuItemPrice {
+  id           String     @id @default(uuid())
+  menuItemId   String
+  priceLevelId String
+  locationId   String?
+  price        Decimal    @db.Decimal(10, 2)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  menuItem     MenuItem   @relation(fields: [menuItemId], references: [id])
+  priceLevel   PriceLevel @relation(fields: [priceLevelId], references: [id])
+
+  @@map("menu_item_prices")
 }

@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import dotenv from 'dotenv';
 import venueRoutes from './routes/venues/index';
+import menuRoutes from './routes/menu/index';
 
 dotenv.config();
 
@@ -20,11 +21,9 @@ const server = Fastify({
   }
 });
 
-// Register plugins
 server.register(cors, { origin: true });
 server.register(helmet, { contentSecurityPolicy: false });
 
-// Add content type parser for JSON
 server.addContentTypeParser(
   'application/json',
   { parseAs: 'string' },
@@ -39,10 +38,9 @@ server.addContentTypeParser(
   }
 );
 
-// Register routes
 server.register(venueRoutes, { prefix: '/api/venues' });
+server.register(menuRoutes, { prefix: '/api/menu' });
 
-// Health check
 server.get('/health', async () => {
   return {
     status: 'ok',
@@ -52,7 +50,6 @@ server.get('/health', async () => {
   };
 });
 
-// Root
 server.get('/', async () => {
   return {
     name: 'EPoS Platform API',
@@ -60,7 +57,8 @@ server.get('/', async () => {
     status: 'running',
     endpoints: {
       health: '/health',
-      venues: '/api/venues'
+      venues: '/api/venues',
+      menu: '/api/menu'
     }
   };
 });
@@ -72,7 +70,8 @@ const start = async () => {
     await server.listen({ port, host });
     console.log(`\n🚀 EPoS API running at http://localhost:${port}`);
     console.log(`📋 Health check: http://localhost:${port}/health`);
-    console.log(`🏪 Venues API:   http://localhost:${port}/api/venues\n`);
+    console.log(`🏪 Venues API:   http://localhost:${port}/api/venues`);
+    console.log(`🍽️  Menu API:     http://localhost:${port}/api/menu\n`);
   } catch (err) {
     server.log.error(err);
     process.exit(1);
