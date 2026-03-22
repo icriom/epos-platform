@@ -130,7 +130,8 @@ export default function OrderScreen({ route, navigation }: any) {
   };
 
   const handleSendToKitchen = async () => {
-    if (!order || order.items.length === 0) {
+    // FIX 1: Guard both order and order.items before calling .length
+    if (!order || !order.items || order.items.length === 0) {
       Alert.alert("No Items", "Add items to the order first");
       return;
     }
@@ -265,7 +266,8 @@ export default function OrderScreen({ route, navigation }: any) {
             {(order?.items ?? []).length === 0 && (
               <Text style={styles.emptyOrder}>No items yet</Text>
             )}
-            {order?.items.map((item) => (
+            {/* FIX 2: Use (order?.items ?? []).map instead of order?.items.map */}
+            {(order?.items ?? []).map((item) => (
               <View key={item.id} style={styles.orderItem}>
                 <View style={styles.orderItemLeft}>
                   <Text style={styles.orderItemQty}>{item.quantity}x</Text>

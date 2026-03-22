@@ -112,6 +112,7 @@ export default function PinLoginScreen({ navigation }: any) {
           data={staff}
           keyExtractor={(item) => item.id}
           numColumns={3}
+          style={{ width: "100%" }}
           contentContainerStyle={styles.staffGrid}
           renderItem={({ item }) => (
             <TouchableOpacity
@@ -231,6 +232,8 @@ const styles = StyleSheet.create({
   staffGrid: {
     paddingHorizontal: 24,
     paddingBottom: 24,
+    flexGrow: 1,
+    width: "100%",
   },
   staffCard: {
     flex: 1,
@@ -271,6 +274,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 32,
+    width: "100%",
   },
   pinHeader: {
     alignItems: "center",
@@ -330,7 +334,7 @@ const styles = StyleSheet.create({
   keypad: {
     flexDirection: "row",
     flexWrap: "wrap",
-    width: 280,
+    width: 320,
     justifyContent: "center",
     gap: 12,
   },
