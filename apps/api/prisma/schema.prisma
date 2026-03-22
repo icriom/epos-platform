@@ -345,7 +345,7 @@ model TradingSession {
 model Order {
   id               String         @id @default(uuid())
   venueId          String
-  locationId       String
+  locationId       String?
   sessionId        String
   deviceId         String?
   staffId          String

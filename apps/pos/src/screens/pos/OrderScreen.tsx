@@ -100,7 +100,6 @@ export default function OrderScreen({ route, navigation }: any) {
       const orderPayload = table
         ? {
             venueId: venueId!,
-            locationId: table.tablePlanId,
             sessionId: resolvedSessionId,
             staffId: staff!.id,
             tableId: table.id,
@@ -109,7 +108,7 @@ export default function OrderScreen({ route, navigation }: any) {
           }
         : {
             venueId: venueId!,
-            locationId: "",
+            locationId: undefined,
             sessionId: resolvedSessionId,
             staffId: staff!.id,
             orderType: "WALK_IN",

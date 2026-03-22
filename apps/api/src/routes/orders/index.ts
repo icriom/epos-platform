@@ -31,7 +31,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       const order = await prisma.order.create({
         data: {
           venueId,
-          locationId: locationId ?? null,
+          ...(locationId ? { locationId } : {}),
           sessionId,
           staffId,
           tableId,
