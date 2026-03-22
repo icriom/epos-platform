@@ -7,6 +7,7 @@ import {
   ScrollView,
   FlatList,
   Alert,
+  Modal,
   SafeAreaView,
   ActivityIndicator,
 } from "react-native";
@@ -59,7 +60,6 @@ interface Order {
 }
 
 export default function OrderScreen({ route, navigation }: any) {
-  // table is optional — not passed for walk-in orders
   const { table, sessionId: paramSessionId } = route.params ?? {};
   const { staff, venueId } = useAuthStore();
 
@@ -72,6 +72,9 @@ export default function OrderScreen({ route, navigation }: any) {
   );
   const [loading, setLoading] = useState(true);
   const [addingItem, setAddingItem] = useState<string | null>(null);
+  const [selectedItem, setSelectedItem] = useState<OrderItem | null>(null);
+  const [itemModalVisible, setItemModalVisible] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
 
   useEffect(() => {
     initialise();
@@ -79,7 +82,6 @@ export default function OrderScreen({ route, navigation }: any) {
 
   const initialise = async () => {
     try {
-      // Load menu
       const menuResponse = await menuApi.getMenu(venueId!);
       const menus = menuResponse.data.data;
       if (menus.length > 0) {
@@ -88,7 +90,6 @@ export default function OrderScreen({ route, navigation }: any) {
         if (cats.length > 0) setActiveCategory(cats[0].id);
       }
 
-      // Resolve session — use param if provided, otherwise fetch current session
       let resolvedSessionId = paramSessionId;
       if (!resolvedSessionId) {
         const sessionResponse = await sessionApi.getCurrentSession(venueId!);
@@ -96,7 +97,6 @@ export default function OrderScreen({ route, navigation }: any) {
         setSessionId(resolvedSessionId);
       }
 
-      // Create order — walk-in if no table, table order if table provided
       const orderPayload = table
         ? {
             venueId: venueId!,
@@ -108,7 +108,6 @@ export default function OrderScreen({ route, navigation }: any) {
           }
         : {
             venueId: venueId!,
-            locationId: undefined,
             sessionId: resolvedSessionId,
             staffId: staff!.id,
             orderType: "WALK_IN",
@@ -129,23 +128,112 @@ export default function OrderScreen({ route, navigation }: any) {
     if (!orderId) return;
     setAddingItem(item.id);
     try {
-      await orderApi.addItem(orderId, {
-        menuItemId: item.id,
-        menuItemName: item.name,
-        quantity: 1,
-        unitPrice: parseFloat(item.basePrice),
-        vatType: item.vatType,
-        vatRate: parseFloat(item.vatRate),
-        course: item.course,
-      });
+      const existing = order?.items?.find(
+        (i) => i.menuItemId === item.id && i.status !== "VOID",
+      );
 
-      const orderResponse = await orderApi.getOrder(orderId);
-      setOrder(orderResponse.data.data);
+      if (existing) {
+        const response = await orderApi.updateItemQuantity(
+          orderId,
+          existing.id,
+          existing.quantity + 1,
+        );
+        setOrder(response.data.data);
+      } else {
+        await orderApi.addItem(orderId, {
+          menuItemId: item.id,
+          menuItemName: item.name,
+          quantity: 1,
+          unitPrice: parseFloat(item.basePrice),
+          vatType: item.vatType,
+          vatRate: parseFloat(item.vatRate),
+          course: item.course,
+        });
+        const orderResponse = await orderApi.getOrder(orderId);
+        setOrder(orderResponse.data.data);
+      }
     } catch (error) {
       Alert.alert("Error", "Could not add item");
     } finally {
       setAddingItem(null);
     }
+  };
+
+  const handleItemPress = (item: OrderItem) => {
+    setSelectedItem(item);
+    setItemModalVisible(true);
+  };
+
+  const handleAddOne = async () => {
+    if (!selectedItem || !orderId) return;
+    setActionLoading(true);
+    try {
+      const response = await orderApi.updateItemQuantity(
+        orderId,
+        selectedItem.id,
+        selectedItem.quantity + 1,
+      );
+      setOrder(response.data.data);
+      setItemModalVisible(false);
+    } catch (error) {
+      Alert.alert("Error", "Could not update item");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleRemoveOne = async () => {
+    if (!selectedItem || !orderId) return;
+    setActionLoading(true);
+    try {
+      const response = await orderApi.updateItemQuantity(
+        orderId,
+        selectedItem.id,
+        selectedItem.quantity - 1,
+      );
+      setOrder(response.data.data);
+      setItemModalVisible(false);
+    } catch (error) {
+      Alert.alert("Error", "Could not update item");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleVoidItem = async () => {
+    if (!selectedItem || !orderId) return;
+    setActionLoading(true);
+    try {
+      const response = await orderApi.voidItem(orderId, selectedItem.id);
+      setOrder(response.data.data);
+      setItemModalVisible(false);
+    } catch (error) {
+      Alert.alert("Error", "Could not void item");
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleCancelSale = () => {
+    Alert.alert(
+      "Cancel Sale",
+      "Are you sure you want to cancel this sale? All items will be removed.",
+      [
+        { text: "Keep Sale", style: "cancel" },
+        {
+          text: "Cancel Sale",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await orderApi.updateStatus(orderId!, "VOID");
+              navigation.replace("Order");
+            } catch (error) {
+              Alert.alert("Error", "Could not cancel sale");
+            }
+          },
+        },
+      ],
+    );
   };
 
   const handleSendToKitchen = async () => {
@@ -155,7 +243,7 @@ export default function OrderScreen({ route, navigation }: any) {
     }
     await orderApi.updateStatus(orderId!, "SENT");
     Alert.alert("Sent to Kitchen", `Order #${order.orderNumber} sent`);
-    navigation.replace("Order"); // Fresh walk-in order after sending
+    navigation.replace("Order");
   };
 
   const handleOpenTables = () => {
@@ -164,10 +252,10 @@ export default function OrderScreen({ route, navigation }: any) {
 
   const orderTitle = table ? `Table ${table.tableNumber}` : "Walk-in";
   const orderSubtitle = table ? `${table.covers} covers` : "No table assigned";
-
   const activeItems =
     categories.find((c) => c.id === activeCategory)?.items ?? [];
   const availableItems = activeItems.filter((i) => i.isAvailable);
+  const hasItems = (order?.items ?? []).length > 0;
 
   if (loading) {
     return (
@@ -190,12 +278,10 @@ export default function OrderScreen({ route, navigation }: any) {
         >
           <Text style={styles.tablesButtonText}>⊞ Tables</Text>
         </TouchableOpacity>
-
         <View style={styles.headerCenter}>
           <Text style={styles.tableTitle}>{orderTitle}</Text>
           <Text style={styles.tableCovers}>{orderSubtitle}</Text>
         </View>
-
         <TouchableOpacity
           style={styles.sendButton}
           onPress={handleSendToKitchen}
@@ -294,7 +380,12 @@ export default function OrderScreen({ route, navigation }: any) {
               <Text style={styles.emptyOrder}>No items yet</Text>
             )}
             {(order?.items ?? []).map((item) => (
-              <View key={item.id} style={styles.orderItem}>
+              <TouchableOpacity
+                key={item.id}
+                style={styles.orderItem}
+                onPress={() => handleItemPress(item)}
+                activeOpacity={0.7}
+              >
                 <View style={styles.orderItemLeft}>
                   <Text style={styles.orderItemQty}>{item.quantity}x</Text>
                   <View>
@@ -309,7 +400,7 @@ export default function OrderScreen({ route, navigation }: any) {
                 <Text style={styles.orderItemPrice}>
                   £{parseFloat(item.lineTotal).toFixed(2)}
                 </Text>
-              </View>
+              </TouchableOpacity>
             ))}
           </ScrollView>
 
@@ -333,18 +424,81 @@ export default function OrderScreen({ route, navigation }: any) {
                 £{parseFloat(order?.total ?? "0").toFixed(2)}
               </Text>
             </View>
+            <TouchableOpacity
+              style={[
+                styles.cancelButton,
+                !hasItems && styles.cancelButtonDisabled,
+              ]}
+              onPress={handleCancelSale}
+              disabled={!hasItems}
+            >
+              <Text style={styles.cancelButtonText}>✕ Cancel Sale</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </View>
+
+      {/* Item Action Modal */}
+      <Modal
+        visible={itemModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setItemModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setItemModalVisible(false)}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>{selectedItem?.menuItemName}</Text>
+            <Text style={styles.modalSubtitle}>
+              {selectedItem?.quantity}x · £
+              {parseFloat(selectedItem?.lineTotal ?? "0").toFixed(2)}
+            </Text>
+            {actionLoading ? (
+              <ActivityIndicator
+                color={theme.colors.primary}
+                style={{ marginVertical: 24 }}
+              />
+            ) : (
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonAdd]}
+                  onPress={handleAddOne}
+                >
+                  <Text style={styles.modalButtonIcon}>➕</Text>
+                  <Text style={styles.modalButtonText}>Add One</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonRemove]}
+                  onPress={handleRemoveOne}
+                >
+                  <Text style={styles.modalButtonIcon}>➖</Text>
+                  <Text style={styles.modalButtonText}>Remove One</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalButtonVoid]}
+                  onPress={handleVoidItem}
+                >
+                  <Text style={styles.modalButtonIcon}>🗑</Text>
+                  <Text
+                    style={[styles.modalButtonText, styles.modalButtonVoidText]}
+                  >
+                    Void Item
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
+  container: { flex: 1, backgroundColor: theme.colors.background },
   loadingContainer: {
     flex: 1,
     justifyContent: "center",
@@ -380,9 +534,7 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.md,
     fontWeight: theme.fontWeight.medium,
   },
-  headerCenter: {
-    alignItems: "center",
-  },
+  headerCenter: { alignItems: "center" },
   tableTitle: {
     fontSize: theme.fontSize.xl,
     fontWeight: theme.fontWeight.bold,
@@ -405,10 +557,7 @@ const styles = StyleSheet.create({
     fontWeight: theme.fontWeight.bold,
     fontSize: theme.fontSize.md,
   },
-  body: {
-    flex: 1,
-    flexDirection: "row",
-  },
+  body: { flex: 1, flexDirection: "row" },
   menuPanel: {
     flex: 3,
     borderRightWidth: 1,
@@ -431,9 +580,7 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     fontWeight: theme.fontWeight.medium,
   },
-  itemsGrid: {
-    padding: 12,
-  },
+  itemsGrid: { padding: 12 },
   menuItem: {
     flex: 1,
     margin: 6,
@@ -461,10 +608,7 @@ const styles = StyleSheet.create({
     fontWeight: theme.fontWeight.bold,
     color: theme.colors.primary,
   },
-  emptyCategory: {
-    padding: 40,
-    alignItems: "center",
-  },
+  emptyCategory: { padding: 40, alignItems: "center" },
   emptyCategoryText: {
     color: theme.colors.textMuted,
     fontSize: theme.fontSize.md,
@@ -491,10 +635,7 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.sm,
     color: theme.colors.textSecondary,
   },
-  orderItems: {
-    flex: 1,
-    padding: 12,
-  },
+  orderItems: { flex: 1, padding: 12 },
   emptyOrder: {
     color: theme.colors.textMuted,
     fontSize: theme.fontSize.md,
@@ -541,10 +682,7 @@ const styles = StyleSheet.create({
     borderTopColor: theme.colors.border,
     gap: 8,
   },
-  totalRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
+  totalRow: { flexDirection: "row", justifyContent: "space-between" },
   totalRowFinal: {
     marginTop: 8,
     paddingTop: 8,
@@ -555,10 +693,7 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.md,
     color: theme.colors.textSecondary,
   },
-  totalValue: {
-    fontSize: theme.fontSize.md,
-    color: theme.colors.textPrimary,
-  },
+  totalValue: { fontSize: theme.fontSize.md, color: theme.colors.textPrimary },
   totalLabelFinal: {
     fontSize: theme.fontSize.lg,
     fontWeight: theme.fontWeight.bold,
@@ -569,4 +704,72 @@ const styles = StyleSheet.create({
     fontWeight: theme.fontWeight.bold,
     color: theme.colors.primary,
   },
+  cancelButton: {
+    marginTop: 12,
+    paddingVertical: 10,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.error,
+    alignItems: "center",
+  },
+  cancelButtonDisabled: { borderColor: theme.colors.border, opacity: 0.4 },
+  cancelButtonText: {
+    color: theme.colors.error,
+    fontSize: theme.fontSize.md,
+    fontWeight: theme.fontWeight.medium,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalContent: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.borderRadius.lg,
+    padding: 24,
+    width: 320,
+    alignItems: "center",
+  },
+  modalTitle: {
+    fontSize: theme.fontSize.xl,
+    fontWeight: theme.fontWeight.bold,
+    color: theme.colors.textPrimary,
+    marginBottom: 4,
+    textAlign: "center",
+  },
+  modalSubtitle: {
+    fontSize: theme.fontSize.md,
+    color: theme.colors.textSecondary,
+    marginBottom: 24,
+  },
+  modalActions: { width: "100%", gap: 10 },
+  modalButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 14,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    gap: 12,
+  },
+  modalButtonAdd: {
+    borderColor: theme.colors.success,
+    backgroundColor: `${theme.colors.success}15`,
+  },
+  modalButtonRemove: {
+    borderColor: theme.colors.primary,
+    backgroundColor: `${theme.colors.primary}15`,
+  },
+  modalButtonVoid: {
+    borderColor: theme.colors.error,
+    backgroundColor: `${theme.colors.error}15`,
+  },
+  modalButtonIcon: { fontSize: 20 },
+  modalButtonText: {
+    fontSize: theme.fontSize.md,
+    fontWeight: theme.fontWeight.medium,
+    color: theme.colors.textPrimary,
+  },
+  modalButtonVoidText: { color: theme.colors.error },
 });

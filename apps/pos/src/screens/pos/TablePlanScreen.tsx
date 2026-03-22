@@ -10,7 +10,7 @@ import {
   Alert,
 } from "react-native";
 import { theme } from "../../theme";
-import { tableApi, sessionApi, orderApi } from "../../services/api";
+import { tableApi, sessionApi } from "../../services/api";
 import { useAuthStore } from "../../store/authStore";
 
 interface Table {
@@ -31,11 +31,11 @@ interface TablePlan {
   tables: Table[];
 }
 
-export default function TablePlanScreen({ navigation }: any) {
+export default function TablePlanScreen({ route, navigation }: any) {
+  const { sessionId: paramSessionId } = route.params ?? {};
   const [plans, setPlans] = useState<TablePlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [activePlan, setActivePlan] = useState(0);
-  const { sessionId: paramSessionId } = route.params ?? {};
   const { staff, venueId, sessionId, setSession, logout } = useAuthStore();
 
   useEffect(() => {
@@ -47,7 +47,6 @@ export default function TablePlanScreen({ navigation }: any) {
       const plansResponse = await tableApi.getTablePlan(venueId!);
       setPlans(plansResponse.data.data);
 
-      // Use passed sessionId first, then try fetching current session
       if (paramSessionId) {
         setSession(paramSessionId);
       } else {
@@ -72,16 +71,11 @@ export default function TablePlanScreen({ navigation }: any) {
         "Would you like to open a trading session?",
         [
           { text: "Cancel", style: "cancel" },
-          {
-            text: "Open Session",
-            onPress: () => openSession(table),
-          },
+          { text: "Open Session", onPress: () => openSession(table) },
         ],
       );
       return;
     }
-
-    // Navigate to order screen for this table
     navigation.navigate("Order", { table, sessionId });
   };
 
@@ -100,8 +94,7 @@ export default function TablePlanScreen({ navigation }: any) {
     }
   };
 
-  const getTableStatusColour = (table: Table) => {
-    // For now all tables are available — will update with live order data
+  const getTableStatusColour = (_table: Table) => {
     return theme.colors.tableAvailable;
   };
 
@@ -126,7 +119,14 @@ export default function TablePlanScreen({ navigation }: any) {
             {sessionId ? "● Session Open" : "○ No Session"}
           </Text>
         </View>
+
         <View style={styles.headerRight}>
+          <TouchableOpacity
+            onPress={() => navigation.navigate("Order")}
+            style={styles.backToTillButton}
+          >
+            <Text style={styles.backToTillText}>← Till</Text>
+          </TouchableOpacity>
           <Text style={styles.staffName}>{staff?.displayName}</Text>
           <TouchableOpacity onPress={logout} style={styles.logoutButton}>
             <Text style={styles.logoutText}>Log Out</Text>
@@ -273,16 +273,28 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   headerRight: {
-    alignItems: "flex-end",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+  },
+  backToTillButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  backToTillText: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
   },
   staffName: {
     fontSize: theme.fontSize.md,
     color: theme.colors.textPrimary,
     fontWeight: theme.fontWeight.medium,
   },
-  logoutButton: {
-    marginTop: 4,
-  },
+  logoutButton: {},
   logoutText: {
     fontSize: theme.fontSize.sm,
     color: theme.colors.primary,

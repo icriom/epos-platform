@@ -207,4 +207,118 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       return { success: false, error: "Failed to update order status" };
     }
   });
+
+  // Update item quantity
+  fastify.patch<{
+    Params: { id: string; itemId: string };
+    Body: { quantity: number };
+  }>("/:id/items/:itemId/quantity", async (request, reply) => {
+    try {
+      const { quantity } = request.body;
+      const { id, itemId } = request.params;
+
+      if (quantity <= 0) {
+        // Void the item if quantity reaches 0
+        await prisma.orderItem.update({
+          where: { id: itemId },
+          data: { status: "VOID" },
+        });
+      } else {
+        const unitPrice = await prisma.orderItem.findUnique({
+          where: { id: itemId },
+          select: { unitPrice: true, vatRate: true },
+        });
+        const lineTotal = Number(unitPrice!.unitPrice) * quantity;
+        const vatAmount = (lineTotal * Number(unitPrice!.vatRate)) / 100;
+        await prisma.orderItem.update({
+          where: { id: itemId },
+          data: { quantity, lineTotal, vatAmount },
+        });
+      }
+
+      // Recalculate order totals
+      const allItems = await prisma.orderItem.findMany({
+        where: { orderId: id, status: { not: "VOID" } },
+      });
+      const subtotal = allItems.reduce(
+        (sum, i) => sum + Number(i.lineTotal),
+        0,
+      );
+      const vatTotal = allItems.reduce(
+        (sum, i) => sum + Number(i.vatAmount),
+        0,
+      );
+      await prisma.order.update({
+        where: { id },
+        data: { subtotal, vatTotal, total: subtotal },
+      });
+
+      const order = await prisma.order.findUnique({
+        where: { id },
+        include: {
+          items: {
+            where: { status: { not: "VOID" } },
+            include: { modifiers: true },
+            orderBy: { createdAt: "asc" },
+          },
+          payments: true,
+          discounts: true,
+        },
+      });
+
+      return { success: true, data: order };
+    } catch (error) {
+      reply.status(500);
+      return { success: false, error: "Failed to update item quantity" };
+    }
+  });
+
+  // Void item
+  fastify.patch<{
+    Params: { id: string; itemId: string };
+  }>("/:id/items/:itemId/void", async (request, reply) => {
+    try {
+      const { id, itemId } = request.params;
+
+      await prisma.orderItem.update({
+        where: { id: itemId },
+        data: { status: "VOID" },
+      });
+
+      const allItems = await prisma.orderItem.findMany({
+        where: { orderId: id, status: { not: "VOID" } },
+      });
+      const subtotal = allItems.reduce(
+        (sum, i) => sum + Number(i.lineTotal),
+        0,
+      );
+      const vatTotal = allItems.reduce(
+        (sum, i) => sum + Number(i.vatAmount),
+        0,
+      );
+
+      const order = await prisma.order.update({
+        where: { id },
+        data: { subtotal, vatTotal, total: subtotal },
+      });
+
+      const fullOrder = await prisma.order.findUnique({
+        where: { id },
+        include: {
+          items: {
+            where: { status: { not: "VOID" } },
+            include: { modifiers: true },
+            orderBy: { createdAt: "asc" },
+          },
+          payments: true,
+          discounts: true,
+        },
+      });
+
+      return { success: true, data: fullOrder };
+    } catch (error) {
+      reply.status(500);
+      return { success: false, error: "Failed to void item" };
+    }
+  });
 }

@@ -84,6 +84,10 @@ export const orderApi = {
     api.get(`/api/orders/session/${sessionId}`),
   updateStatus: (orderId: string, status: string) =>
     api.patch(`/api/orders/${orderId}/status`, { status }),
+  updateItemQuantity: (orderId: string, itemId: string, quantity: number) =>
+    api.patch(`/api/orders/${orderId}/items/${itemId}/quantity`, { quantity }),
+  voidItem: (orderId: string, itemId: string) =>
+    api.patch(`/api/orders/${orderId}/items/${itemId}/void`),
 };
 
 // Table endpoints
