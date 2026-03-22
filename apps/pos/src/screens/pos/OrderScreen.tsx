@@ -11,7 +11,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { theme } from "../../theme";
-import { menuApi, orderApi } from "../../services/api";
+import { menuApi, orderApi, sessionApi } from "../../services/api";
 import { useAuthStore } from "../../store/authStore";
 
 interface MenuItem {
@@ -49,7 +49,7 @@ interface OrderItem {
 interface Order {
   id: string;
   orderNumber: number;
-  tableId: string;
+  tableId: string | null;
   covers: number;
   status: string;
   subtotal: string;
@@ -59,13 +59,17 @@ interface Order {
 }
 
 export default function OrderScreen({ route, navigation }: any) {
-  const { table, sessionId } = route.params;
+  // table is optional — not passed for walk-in orders
+  const { table, sessionId: paramSessionId } = route.params ?? {};
   const { staff, venueId } = useAuthStore();
 
   const [categories, setCategories] = useState<MenuCategory[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>("");
   const [order, setOrder] = useState<Order | null>(null);
   const [orderId, setOrderId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(
+    paramSessionId ?? null,
+  );
   const [loading, setLoading] = useState(true);
   const [addingItem, setAddingItem] = useState<string | null>(null);
 
@@ -84,17 +88,34 @@ export default function OrderScreen({ route, navigation }: any) {
         if (cats.length > 0) setActiveCategory(cats[0].id);
       }
 
-      // Create order for this table
-      const orderResponse = await orderApi.createOrder({
-        venueId: venueId!,
-        locationId: table.tablePlanId,
-        sessionId,
-        staffId: staff!.id,
-        tableId: table.id,
-        covers: table.covers,
-        orderType: "TABLE",
-      });
+      // Resolve session — use param if provided, otherwise fetch current session
+      let resolvedSessionId = paramSessionId;
+      if (!resolvedSessionId) {
+        const sessionResponse = await sessionApi.getCurrentSession(venueId!);
+        resolvedSessionId = sessionResponse.data.data.id;
+        setSessionId(resolvedSessionId);
+      }
 
+      // Create order — walk-in if no table, table order if table provided
+      const orderPayload = table
+        ? {
+            venueId: venueId!,
+            locationId: table.tablePlanId,
+            sessionId: resolvedSessionId,
+            staffId: staff!.id,
+            tableId: table.id,
+            covers: table.covers,
+            orderType: "TABLE",
+          }
+        : {
+            venueId: venueId!,
+            locationId: "",
+            sessionId: resolvedSessionId,
+            staffId: staff!.id,
+            orderType: "WALK_IN",
+          };
+
+      const orderResponse = await orderApi.createOrder(orderPayload);
       const newOrder = orderResponse.data.data;
       setOrderId(newOrder.id);
       setOrder(newOrder);
@@ -119,7 +140,6 @@ export default function OrderScreen({ route, navigation }: any) {
         course: item.course,
       });
 
-      // Refresh order
       const orderResponse = await orderApi.getOrder(orderId);
       setOrder(orderResponse.data.data);
     } catch (error) {
@@ -130,15 +150,21 @@ export default function OrderScreen({ route, navigation }: any) {
   };
 
   const handleSendToKitchen = async () => {
-    // FIX 1: Guard both order and order.items before calling .length
     if (!order || !order.items || order.items.length === 0) {
       Alert.alert("No Items", "Add items to the order first");
       return;
     }
     await orderApi.updateStatus(orderId!, "SENT");
     Alert.alert("Sent to Kitchen", `Order #${order.orderNumber} sent`);
-    navigation.goBack();
+    navigation.replace("Order"); // Fresh walk-in order after sending
   };
+
+  const handleOpenTables = () => {
+    navigation.navigate("TablePlan", { sessionId });
+  };
+
+  const orderTitle = table ? `Table ${table.tableNumber}` : "Walk-in";
+  const orderSubtitle = table ? `${table.covers} covers` : "No table assigned";
 
   const activeItems =
     categories.find((c) => c.id === activeCategory)?.items ?? [];
@@ -148,7 +174,9 @@ export default function OrderScreen({ route, navigation }: any) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={theme.colors.primary} />
-        <Text style={styles.loadingText}>Opening table...</Text>
+        <Text style={styles.loadingText}>
+          {table ? "Opening table..." : "Opening till..."}
+        </Text>
       </View>
     );
   }
@@ -158,15 +186,17 @@ export default function OrderScreen({ route, navigation }: any) {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
+          onPress={handleOpenTables}
+          style={styles.tablesButton}
         >
-          <Text style={styles.backText}>← Floor</Text>
+          <Text style={styles.tablesButtonText}>⊞ Tables</Text>
         </TouchableOpacity>
+
         <View style={styles.headerCenter}>
-          <Text style={styles.tableTitle}>Table {table.tableNumber}</Text>
-          <Text style={styles.tableCovers}>{table.covers} covers</Text>
+          <Text style={styles.tableTitle}>{orderTitle}</Text>
+          <Text style={styles.tableCovers}>{orderSubtitle}</Text>
         </View>
+
         <TouchableOpacity
           style={styles.sendButton}
           onPress={handleSendToKitchen}
@@ -178,7 +208,6 @@ export default function OrderScreen({ route, navigation }: any) {
       <View style={styles.body}>
         {/* Left — Menu */}
         <View style={styles.menuPanel}>
-          {/* Category tabs */}
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -210,7 +239,6 @@ export default function OrderScreen({ route, navigation }: any) {
             ))}
           </ScrollView>
 
-          {/* Menu items grid */}
           <FlatList
             data={availableItems}
             keyExtractor={(item) => item.id}
@@ -266,7 +294,6 @@ export default function OrderScreen({ route, navigation }: any) {
             {(order?.items ?? []).length === 0 && (
               <Text style={styles.emptyOrder}>No items yet</Text>
             )}
-            {/* FIX 2: Use (order?.items ?? []).map instead of order?.items.map */}
             {(order?.items ?? []).map((item) => (
               <View key={item.id} style={styles.orderItem}>
                 <View style={styles.orderItemLeft}>
@@ -340,14 +367,19 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
-  backButton: {
+  tablesButton: {
     paddingVertical: 8,
-    paddingHorizontal: 4,
-    minWidth: 80,
+    paddingHorizontal: 14,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    minWidth: 100,
+    alignItems: "center",
   },
-  backText: {
-    color: theme.colors.primary,
+  tablesButtonText: {
+    color: theme.colors.textPrimary,
     fontSize: theme.fontSize.md,
+    fontWeight: theme.fontWeight.medium,
   },
   headerCenter: {
     alignItems: "center",

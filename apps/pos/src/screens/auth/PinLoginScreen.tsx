@@ -68,7 +68,7 @@ export default function PinLoginScreen({ navigation }: any) {
       );
       const { token, staff: staffData } = response.data.data;
       setAuth(token, staffData, VENUE_ID);
-      navigation.replace("TablePlan");
+      navigation.replace("Order");
     } catch (error) {
       setPin("");
       Alert.alert("Invalid PIN", "Please try again");

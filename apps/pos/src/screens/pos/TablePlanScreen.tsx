@@ -35,6 +35,7 @@ export default function TablePlanScreen({ navigation }: any) {
   const [plans, setPlans] = useState<TablePlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [activePlan, setActivePlan] = useState(0);
+  const { sessionId: paramSessionId } = route.params ?? {};
   const { staff, venueId, sessionId, setSession, logout } = useAuthStore();
 
   useEffect(() => {
@@ -43,16 +44,19 @@ export default function TablePlanScreen({ navigation }: any) {
 
   const loadData = async () => {
     try {
-      // Load table plan
       const plansResponse = await tableApi.getTablePlan(venueId!);
       setPlans(plansResponse.data.data);
 
-      // Check for open session
-      try {
-        const sessionResponse = await sessionApi.getCurrentSession(venueId!);
-        setSession(sessionResponse.data.data.id);
-      } catch {
-        // No open session — that's ok
+      // Use passed sessionId first, then try fetching current session
+      if (paramSessionId) {
+        setSession(paramSessionId);
+      } else {
+        try {
+          const sessionResponse = await sessionApi.getCurrentSession(venueId!);
+          setSession(sessionResponse.data.data.id);
+        } catch {
+          // No open session — handled at table press
+        }
       }
     } catch (error) {
       Alert.alert("Error", "Could not load table plan");
