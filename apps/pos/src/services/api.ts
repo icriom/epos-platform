@@ -88,6 +88,17 @@ export const orderApi = {
     api.patch(`/api/orders/${orderId}/items/${itemId}/quantity`, { quantity }),
   voidItem: (orderId: string, itemId: string) =>
     api.patch(`/api/orders/${orderId}/items/${itemId}/void`),
+  recordPayment: (
+    orderId: string,
+    amount: number,
+    method: string,
+    amountTendered?: number,
+  ) =>
+    api.post(`/api/orders/${orderId}/payment`, {
+      amount,
+      method,
+      amountTendered,
+    }),
 };
 
 // Table endpoints

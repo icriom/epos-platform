@@ -236,6 +236,14 @@ export default function OrderScreen({ route, navigation }: any) {
     );
   };
 
+  const handlePay = () => {
+    if (!order || !order.items || order.items.length === 0) {
+      Alert.alert("No Items", "Add items to the order first");
+      return;
+    }
+    navigation.navigate("Payment", { order });
+  };
+
   const handleSendToKitchen = async () => {
     if (!order || !order.items || order.items.length === 0) {
       Alert.alert("No Items", "Add items to the order first");
@@ -424,16 +432,30 @@ export default function OrderScreen({ route, navigation }: any) {
                 £{parseFloat(order?.total ?? "0").toFixed(2)}
               </Text>
             </View>
-            <TouchableOpacity
-              style={[
-                styles.cancelButton,
-                !hasItems && styles.cancelButtonDisabled,
-              ]}
-              onPress={handleCancelSale}
-              disabled={!hasItems}
-            >
-              <Text style={styles.cancelButtonText}>✕ Cancel Sale</Text>
-            </TouchableOpacity>
+
+            {/* Pay + Cancel row */}
+            <View style={styles.actionRow}>
+              <TouchableOpacity
+                style={[
+                  styles.cancelButton,
+                  !hasItems && styles.cancelButtonDisabled,
+                ]}
+                onPress={handleCancelSale}
+                disabled={!hasItems}
+              >
+                <Text style={styles.cancelButtonText}>✕ Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.payButton,
+                  !hasItems && styles.payButtonDisabled,
+                ]}
+                onPress={handlePay}
+                disabled={!hasItems}
+              >
+                <Text style={styles.payButtonText}>💳 Pay</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </View>
@@ -704,8 +726,9 @@ const styles = StyleSheet.create({
     fontWeight: theme.fontWeight.bold,
     color: theme.colors.primary,
   },
+  actionRow: { flexDirection: "row", gap: 8, marginTop: 12 },
   cancelButton: {
-    marginTop: 12,
+    flex: 1,
     paddingVertical: 10,
     borderRadius: theme.borderRadius.md,
     borderWidth: 1,
@@ -717,6 +740,19 @@ const styles = StyleSheet.create({
     color: theme.colors.error,
     fontSize: theme.fontSize.md,
     fontWeight: theme.fontWeight.medium,
+  },
+  payButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: theme.borderRadius.md,
+    backgroundColor: theme.colors.primary,
+    alignItems: "center",
+  },
+  payButtonDisabled: { opacity: 0.4 },
+  payButtonText: {
+    color: theme.colors.white,
+    fontSize: theme.fontSize.md,
+    fontWeight: theme.fontWeight.bold,
   },
   modalOverlay: {
     flex: 1,

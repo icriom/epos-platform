@@ -6,6 +6,7 @@ import { StatusBar } from "expo-status-bar";
 import PinLoginScreen from "./src/screens/auth/PinLoginScreen";
 import TablePlanScreen from "./src/screens/pos/TablePlanScreen";
 import OrderScreen from "./src/screens/pos/OrderScreen";
+import PaymentScreen from "./src/screens/pos/PaymentScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -24,6 +25,7 @@ export default function App() {
           <Stack.Screen name="PinLogin" component={PinLoginScreen} />
           <Stack.Screen name="TablePlan" component={TablePlanScreen} />
           <Stack.Screen name="Order" component={OrderScreen} />
+          <Stack.Screen name="Payment" component={PaymentScreen} />
         </Stack.Navigator>
       </View>
     </NavigationContainer>

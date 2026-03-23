@@ -321,4 +321,54 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       return { success: false, error: "Failed to void item" };
     }
   });
+  // Record payment
+fastify.post<{
+  Params: { id: string };
+  Body: {
+    amount: number;
+    method: string;
+    amountTendered?: number;
+  };
+}>("/:id/payment", async (request, reply) => {
+  try {
+    const { id } = request.params;
+    const { amount, method, amountTendered } = request.body;
+
+    // Fetch order to get sessionId and staffId
+    const order = await prisma.order.findUnique({
+      where: { id },
+      select: { sessionId: true, staffId: true },
+    });
+
+    if (!order) {
+      reply.status(404);
+      return { success: false, error: "Order not found" };
+    }
+
+    await prisma.payment.create({
+      data: {
+        orderId: id,
+        sessionId: order.sessionId,
+        staffId: order.staffId,
+        amount,
+        method,
+        status: "COMPLETED",
+        currency: "GBP",
+      },
+    });
+
+    const updatedOrder = await prisma.order.update({
+      where: { id },
+      data: {
+        status: "PAID",
+        paidAt: new Date(),
+      },
+    });
+
+    return { success: true, data: updatedOrder };
+  } catch (error) {
+    reply.status(500);
+    return { success: false, error: "Failed to record payment" };
+  }
+});
 }
