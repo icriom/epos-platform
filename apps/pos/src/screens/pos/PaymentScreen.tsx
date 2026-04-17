@@ -17,6 +17,7 @@ interface OrderItem {
   menuItemName: string;
   quantity: number;
   lineTotal: string;
+  status: string;
 }
 
 interface Order {
@@ -25,20 +26,33 @@ interface Order {
   subtotal: string;
   vatTotal: string;
   total: string;
+  amountPaid: string;
   items: OrderItem[];
 }
 
 type Screen =
-  | "METHOD_SELECT" // Choose Cash / Card / Split
-  | "CASH" // Cash numpad
-  | "SPLIT_SETUP" // Choose number of ways
-  | "SPLIT_COLLECT" // Collect each portion (Cash or Card sub-screen)
-  | "SPLIT_PORTION_CASH" // Cash numpad for a split portion
-  | "SUCCESS"; // Payment complete
+  | "METHOD_SELECT"       // Choose Full / Partial
+  | "PARTIAL_MODE"        // Choose By Item or Custom Amount
+  | "PARTIAL_ITEMS"       // Select specific items to pay for
+  | "PARTIAL_CUSTOM"      // Enter a custom amount
+  | "CASH"                // Cash numpad (full payment)
+  | "PARTIAL_CASH"        // Cash numpad (partial payment)
+  | "SPLIT_SETUP"         // Choose number of ways
+  | "SPLIT_COLLECT"       // Collect each portion
+  | "SPLIT_PORTION_CASH"  // Cash numpad for a split portion
+  | "SUCCESS"             // Full payment complete
+  | "PARTIAL_SUCCESS";    // Partial payment stored, returning to table
 
 export default function PaymentScreen({ route, navigation }: any) {
-  const { order } = route.params as { order: Order };
-  const total = parseFloat(order.total);
+  const { order, table } = route.params as { order: Order; table?: any };
+
+  const totalAmount = parseFloat(order.total);
+  const alreadyPaid = parseFloat(order.amountPaid ?? "0");
+  // The amount still outstanding at the point we enter the payment screen
+  const remainingBalance = Math.max(0, totalAmount - alreadyPaid);
+
+  // Items that haven't been paid yet
+  const unpaidItems = order.items.filter((i) => i.status !== "PAID");
 
   const [screen, setScreen] = useState<Screen>("METHOD_SELECT");
   const [tendered, setTendered] = useState("");
@@ -49,20 +63,35 @@ export default function PaymentScreen({ route, navigation }: any) {
   const [paidMethod, setPaidMethod] = useState("");
   const [changeAmount, setChangeAmount] = useState(0);
 
+  // Partial — by item
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(
+    new Set(),
+  );
+
+  // Partial — custom amount
+  const [customAmount, setCustomAmount] = useState("");
+
   const tenderedAmount = parseFloat(tendered) || 0;
-  const change = tenderedAmount - total;
-  const portionAmount = total / splitWays;
+  const change = tenderedAmount - remainingBalance;
+  const portionAmount = remainingBalance / splitWays;
   const currentPortion = splitPortionsPaid + 1;
   const portionChange = tenderedAmount - portionAmount;
 
-  // Quick amounts for full cash payment
+  // The amount being paid in partial mode
+  const selectedItemsTotal = unpaidItems
+    .filter((i) => selectedItemIds.has(i.id))
+    .reduce((sum, i) => sum + parseFloat(i.lineTotal), 0);
+
+  const customAmountValue = parseFloat(customAmount) || 0;
+
+  // Quick amounts for full cash
   const quickAmounts = [
-    Math.ceil(total),
-    Math.ceil(total / 5) * 5,
-    Math.ceil(total / 10) * 10,
-    Math.ceil(total / 20) * 20,
+    Math.ceil(remainingBalance),
+    Math.ceil(remainingBalance / 5) * 5,
+    Math.ceil(remainingBalance / 10) * 10,
+    Math.ceil(remainingBalance / 20) * 20,
   ]
-    .filter((v, i, a) => a.indexOf(v) === i && v >= total)
+    .filter((v, i, a) => a.indexOf(v) === i && v >= remainingBalance)
     .slice(0, 4);
 
   // Quick amounts for split portion
@@ -75,15 +104,24 @@ export default function PaymentScreen({ route, navigation }: any) {
     .filter((v, i, a) => a.indexOf(v) === i && v >= portionAmount)
     .slice(0, 4);
 
-  // Auto-confirm cash when tendered >= total (full payment)
+  // Auto-confirm full cash
   useEffect(() => {
     if (screen !== "CASH") return;
-    if (tenderedAmount >= total && total > 0 && !processing) {
-      handleConfirmPayment("CASH", total, tenderedAmount);
+    if (tenderedAmount >= remainingBalance && remainingBalance > 0 && !processing) {
+      handleConfirmFullPayment("CASH", remainingBalance, tenderedAmount);
     }
   }, [tenderedAmount, screen]);
 
-  // Auto-confirm split portion cash when tendered >= portionAmount
+  // Auto-confirm partial cash
+  useEffect(() => {
+    if (screen !== "PARTIAL_CASH") return;
+    const target = customAmountValue > 0 ? customAmountValue : selectedItemsTotal;
+    if (tenderedAmount >= target && target > 0 && !processing) {
+      handleConfirmPartialPayment("CASH", target, tenderedAmount);
+    }
+  }, [tenderedAmount, screen]);
+
+  // Auto-confirm split portion cash
   useEffect(() => {
     if (screen !== "SPLIT_PORTION_CASH") return;
     if (tenderedAmount >= portionAmount && portionAmount > 0 && !processing) {
@@ -114,7 +152,32 @@ export default function PaymentScreen({ route, navigation }: any) {
     }
   };
 
-  const handleConfirmPayment = async (
+  const handleCustomNumpad = (key: string) => {
+    if (key === "⌫") {
+      setCustomAmount((prev) => prev.slice(0, -1));
+    } else if (key === ".") {
+      if (!customAmount.includes(".")) setCustomAmount((prev) => prev + ".");
+    } else {
+      const parts = customAmount.split(".");
+      if (parts[1] && parts[1].length >= 2) return;
+      setCustomAmount((prev) => prev + key);
+    }
+  };
+
+  const toggleItemSelection = (itemId: string) => {
+    setSelectedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) {
+        next.delete(itemId);
+      } else {
+        next.add(itemId);
+      }
+      return next;
+    });
+  };
+
+  // ── Full payment ────────────────────────────────────────────────────────────
+  const handleConfirmFullPayment = async (
     method: string,
     amount: number,
     amountTendered?: number,
@@ -133,6 +196,41 @@ export default function PaymentScreen({ route, navigation }: any) {
     }
   };
 
+  // ── Partial payment ─────────────────────────────────────────────────────────
+  const handleConfirmPartialPayment = async (
+    method: string,
+    amount: number,
+    amountTendered?: number,
+  ) => {
+    if (processing) return;
+    setProcessing(true);
+    try {
+      const itemIds =
+        selectedItemIds.size > 0 ? Array.from(selectedItemIds) : undefined;
+      const response = await orderApi.recordPartialPayment(
+        order.id,
+        amount,
+        method,
+        itemIds,
+        amountTendered,
+      );
+
+      if (response.data.isFullyPaid) {
+        // Partial payment happened to cover the remaining balance exactly
+        setPaidMethod(method);
+        setChangeAmount(amountTendered ? amountTendered - amount : 0);
+        setScreen("SUCCESS");
+      } else {
+        // Store the table — go back to floor plan
+        setScreen("PARTIAL_SUCCESS");
+      }
+    } catch (error) {
+      Alert.alert("Error", "Could not process payment");
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const handleSplitPortionPaid = async (
     method: string,
     amountTendered?: number,
@@ -143,10 +241,9 @@ export default function PaymentScreen({ route, navigation }: any) {
       const newPortionsPaid = splitPortionsPaid + 1;
 
       if (newPortionsPaid >= splitWays) {
-        // Last portion — record full payment and go to success
         await orderApi.recordPayment(
           order.id,
-          total,
+          remainingBalance,
           `SPLIT_${method}`,
           amountTendered,
         );
@@ -154,7 +251,6 @@ export default function PaymentScreen({ route, navigation }: any) {
         setChangeAmount(amountTendered ? amountTendered - portionAmount : 0);
         setScreen("SUCCESS");
       } else {
-        // More portions to collect
         setSplitPortionsPaid(newPortionsPaid);
         setTendered("");
         setScreen("SPLIT_COLLECT");
@@ -166,7 +262,30 @@ export default function PaymentScreen({ route, navigation }: any) {
     }
   };
 
-  // ── Success screen ──
+  // ── Partial success screen — stored, returning to table plan ────────────────
+  if (screen === "PARTIAL_SUCCESS") {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.successScreen}>
+          <Text style={styles.successTick}>⊞</Text>
+          <Text style={styles.successTitle}>Payment Stored</Text>
+          <Text style={styles.successMethod}>Table stored with balance</Text>
+          <Text style={styles.successAmount}>
+            £{(remainingBalance - (customAmountValue || selectedItemsTotal)).toFixed(2)} remaining
+          </Text>
+          <Text style={styles.successCountdown}>Returning to floor plan...</Text>
+          <TouchableOpacity
+            style={styles.successButton}
+            onPress={() => navigation.navigate("TablePlan")}
+          >
+            <Text style={styles.successButtonText}>Back to Tables</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ── Full success screen ─────────────────────────────────────────────────────
   if (screen === "SUCCESS") {
     return (
       <SafeAreaView style={styles.container}>
@@ -174,7 +293,7 @@ export default function PaymentScreen({ route, navigation }: any) {
           <Text style={styles.successTick}>✓</Text>
           <Text style={styles.successTitle}>Payment Complete</Text>
           <Text style={styles.successMethod}>{paidMethod}</Text>
-          <Text style={styles.successAmount}>£{total.toFixed(2)}</Text>
+          <Text style={styles.successAmount}>£{totalAmount.toFixed(2)}</Text>
           {(paidMethod === "CASH" || paidMethod.startsWith("SPLIT")) &&
             changeAmount > 0 && (
               <View style={styles.successChange}>
@@ -219,6 +338,7 @@ export default function PaymentScreen({ route, navigation }: any) {
         </TouchableOpacity>
         <Text style={styles.headerTitle}>
           Payment — Order #{order.orderNumber}
+          {table ? ` · Table ${table.tableNumber}` : ""}
         </Text>
         <View style={{ minWidth: 80 }} />
       </View>
@@ -229,10 +349,21 @@ export default function PaymentScreen({ route, navigation }: any) {
           <Text style={styles.panelTitle}>Order Summary</Text>
           <ScrollView style={styles.itemList}>
             {order.items.map((item) => (
-              <View key={item.id} style={styles.summaryItem}>
+              <View
+                key={item.id}
+                style={[
+                  styles.summaryItem,
+                  item.status === "PAID" && styles.summaryItemPaid,
+                ]}
+              >
                 <Text style={styles.summaryItemQty}>{item.quantity}x</Text>
                 <Text style={styles.summaryItemName}>{item.menuItemName}</Text>
-                <Text style={styles.summaryItemPrice}>
+                <Text
+                  style={[
+                    styles.summaryItemPrice,
+                    item.status === "PAID" && styles.summaryItemPricePaid,
+                  ]}
+                >
                   £{parseFloat(item.lineTotal).toFixed(2)}
                 </Text>
               </View>
@@ -251,16 +382,29 @@ export default function PaymentScreen({ route, navigation }: any) {
                 £{parseFloat(order.vatTotal).toFixed(2)}
               </Text>
             </View>
+            {alreadyPaid > 0 && (
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Paid</Text>
+                <Text style={[styles.summaryValue, { color: theme.colors.success }]}>
+                  −£{alreadyPaid.toFixed(2)}
+                </Text>
+              </View>
+            )}
             <View style={[styles.summaryRow, styles.summaryTotal]}>
-              <Text style={styles.summaryTotalLabel}>Total</Text>
-              <Text style={styles.summaryTotalValue}>£{total.toFixed(2)}</Text>
+              <Text style={styles.summaryTotalLabel}>
+                {alreadyPaid > 0 ? "Remaining" : "Total"}
+              </Text>
+              <Text style={styles.summaryTotalValue}>
+                £{remainingBalance.toFixed(2)}
+              </Text>
             </View>
           </View>
         </View>
 
         {/* Right — Payment flow */}
         <View style={styles.paymentPanel}>
-          {/* ── Method selector ── */}
+
+          {/* ── Method / mode selector ── */}
           {screen === "METHOD_SELECT" && (
             <View style={styles.methodSelect}>
               <Text style={styles.panelTitle}>Select Payment Method</Text>
@@ -277,7 +421,9 @@ export default function PaymentScreen({ route, navigation }: any) {
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.methodButton, styles.methodCard]}
-                  onPress={() => handleConfirmPayment("CARD", total)}
+                  onPress={() =>
+                    handleConfirmFullPayment("CARD", remainingBalance)
+                  }
                 >
                   <Text style={styles.methodIcon}>💳</Text>
                   <Text style={styles.methodLabel}>Card</Text>
@@ -290,10 +436,302 @@ export default function PaymentScreen({ route, navigation }: any) {
                   <Text style={styles.methodLabel}>Split</Text>
                 </TouchableOpacity>
               </View>
+
+              {/* Partial payment option — only for table orders with unpaid items */}
+              {table && unpaidItems.length > 0 && (
+                <TouchableOpacity
+                  style={styles.partialButton}
+                  onPress={() => setScreen("PARTIAL_MODE")}
+                >
+                  <Text style={styles.partialButtonIcon}>⊘</Text>
+                  <View>
+                    <Text style={styles.partialButtonLabel}>
+                      Partial Payment
+                    </Text>
+                    <Text style={styles.partialButtonSub}>
+                      Someone leaving early? Take part of the bill.
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
-          {/* ── Cash flow ── */}
+          {/* ── Partial mode — choose by item or custom amount ── */}
+          {screen === "PARTIAL_MODE" && (
+            <View style={styles.partialModeSelect}>
+              <View style={styles.flowHeader}>
+                <TouchableOpacity onPress={() => setScreen("METHOD_SELECT")}>
+                  <Text style={styles.changeMethod}>← Back</Text>
+                </TouchableOpacity>
+                <Text style={styles.panelTitle}>Partial Payment</Text>
+              </View>
+              <Text style={styles.partialModeHint}>
+                How would you like to take this payment?
+              </Text>
+              <TouchableOpacity
+                style={styles.partialModeButton}
+                onPress={() => {
+                  setSelectedItemIds(new Set());
+                  setScreen("PARTIAL_ITEMS");
+                }}
+              >
+                <Text style={styles.partialModeIcon}>☑</Text>
+                <View>
+                  <Text style={styles.partialModeLabel}>Pay by Item</Text>
+                  <Text style={styles.partialModeSub}>
+                    Select which items to pay for now
+                  </Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.partialModeButton}
+                onPress={() => {
+                  setCustomAmount("");
+                  setScreen("PARTIAL_CUSTOM");
+                }}
+              >
+                <Text style={styles.partialModeIcon}>£</Text>
+                <View>
+                  <Text style={styles.partialModeLabel}>Custom Amount</Text>
+                  <Text style={styles.partialModeSub}>
+                    Enter any amount to take off the bill
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* ── Partial — select items ── */}
+          {screen === "PARTIAL_ITEMS" && (
+            <View style={styles.partialItems}>
+              <View style={styles.flowHeader}>
+                <TouchableOpacity onPress={() => setScreen("PARTIAL_MODE")}>
+                  <Text style={styles.changeMethod}>← Back</Text>
+                </TouchableOpacity>
+                <Text style={styles.panelTitle}>Select Items to Pay</Text>
+              </View>
+              <ScrollView style={styles.itemSelectList}>
+                {unpaidItems.map((item) => {
+                  const selected = selectedItemIds.has(item.id);
+                  return (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={[
+                        styles.itemSelectRow,
+                        selected && styles.itemSelectRowSelected,
+                      ]}
+                      onPress={() => toggleItemSelection(item.id)}
+                    >
+                      <View
+                        style={[
+                          styles.itemSelectCheck,
+                          selected && styles.itemSelectCheckSelected,
+                        ]}
+                      >
+                        {selected && (
+                          <Text style={styles.itemSelectCheckMark}>✓</Text>
+                        )}
+                      </View>
+                      <Text style={styles.itemSelectQty}>{item.quantity}x</Text>
+                      <Text style={styles.itemSelectName}>
+                        {item.menuItemName}
+                      </Text>
+                      <Text style={styles.itemSelectPrice}>
+                        £{parseFloat(item.lineTotal).toFixed(2)}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+              {selectedItemIds.size > 0 && (
+                <View style={styles.partialItemsFooter}>
+                  <Text style={styles.partialItemsTotal}>
+                    To pay: £{selectedItemsTotal.toFixed(2)}
+                  </Text>
+                  <View style={styles.partialItemsButtons}>
+                    <TouchableOpacity
+                      style={[styles.methodButton, styles.methodCash, { flex: 1, maxHeight: 80 }]}
+                      onPress={() => {
+                        setTendered("");
+                        setScreen("PARTIAL_CASH");
+                      }}
+                    >
+                      <Text style={styles.methodIcon}>💵</Text>
+                      <Text style={styles.methodLabel}>Cash</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.methodButton, styles.methodCard, { flex: 1, maxHeight: 80 }]}
+                      onPress={() =>
+                        handleConfirmPartialPayment("CARD", selectedItemsTotal)
+                      }
+                    >
+                      <Text style={styles.methodIcon}>💳</Text>
+                      <Text style={styles.methodLabel}>Card</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* ── Partial — custom amount entry ── */}
+          {screen === "PARTIAL_CUSTOM" && (
+            <View style={styles.cashFlow}>
+              <View style={styles.flowHeader}>
+                <TouchableOpacity onPress={() => setScreen("PARTIAL_MODE")}>
+                  <Text style={styles.changeMethod}>← Back</Text>
+                </TouchableOpacity>
+                <Text style={styles.panelTitle}>Custom Amount</Text>
+              </View>
+              <Text style={styles.totalDue}>£{remainingBalance.toFixed(2)}</Text>
+              <Text style={styles.totalDueLabel}>Balance remaining</Text>
+              <View style={styles.tenderedDisplay}>
+                <Text style={styles.tenderedLabel}>Amount to take</Text>
+                <Text style={styles.tenderedValue}>
+                  £{customAmount || "0.00"}
+                </Text>
+              </View>
+              <View style={styles.numpad}>
+                {["1","2","3","4","5","6","7","8","9",".","0","⌫"].map((key) => (
+                  <TouchableOpacity
+                    key={key}
+                    style={styles.numpadKey}
+                    onPress={() => handleCustomNumpad(key)}
+                  >
+                    <Text style={styles.numpadKeyText}>{key}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {customAmountValue > 0 &&
+                customAmountValue <= remainingBalance && (
+                  <View style={styles.partialItemsButtons}>
+                    <TouchableOpacity
+                      style={[styles.methodButton, styles.methodCash, { flex: 1, maxHeight: 80 }]}
+                      onPress={() => {
+                        setTendered("");
+                        setScreen("PARTIAL_CASH");
+                      }}
+                    >
+                      <Text style={styles.methodIcon}>💵</Text>
+                      <Text style={styles.methodLabel}>Cash</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.methodButton, styles.methodCard, { flex: 1, maxHeight: 80 }]}
+                      onPress={() =>
+                        handleConfirmPartialPayment("CARD", customAmountValue)
+                      }
+                    >
+                      <Text style={styles.methodIcon}>💳</Text>
+                      <Text style={styles.methodLabel}>Card</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+            </View>
+          )}
+
+          {/* ── Partial cash numpad ── */}
+          {screen === "PARTIAL_CASH" && (
+            <View style={styles.cashFlow}>
+              <View style={styles.flowHeader}>
+                <TouchableOpacity
+                  onPress={() => {
+                    setTendered("");
+                    setScreen(
+                      selectedItemIds.size > 0
+                        ? "PARTIAL_ITEMS"
+                        : "PARTIAL_CUSTOM",
+                    );
+                  }}
+                >
+                  <Text style={styles.changeMethod}>← Change</Text>
+                </TouchableOpacity>
+                <Text style={styles.panelTitle}>Cash — Partial</Text>
+              </View>
+              {(() => {
+                const partialTarget =
+                  customAmountValue > 0
+                    ? customAmountValue
+                    : selectedItemsTotal;
+                const partialChange = tenderedAmount - partialTarget;
+                return (
+                  <>
+                    <Text style={styles.totalDue}>
+                      £{partialTarget.toFixed(2)}
+                    </Text>
+                    <Text style={styles.totalDueLabel}>
+                      Tap a quick amount or enter below
+                    </Text>
+                    <View style={styles.quickAmounts}>
+                      {[
+                        Math.ceil(partialTarget),
+                        Math.ceil(partialTarget / 5) * 5,
+                        Math.ceil(partialTarget / 10) * 10,
+                        Math.ceil(partialTarget / 20) * 20,
+                      ]
+                        .filter(
+                          (v, i, a) =>
+                            a.indexOf(v) === i && v >= partialTarget,
+                        )
+                        .slice(0, 4)
+                        .map((a) => (
+                          <TouchableOpacity
+                            key={a}
+                            style={styles.quickAmount}
+                            onPress={() => setTendered(a.toFixed(2))}
+                          >
+                            <Text style={styles.quickAmountText}>
+                              £{a.toFixed(2)}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                    </View>
+                    <View style={styles.tenderedDisplay}>
+                      <Text style={styles.tenderedLabel}>Tendered</Text>
+                      <Text style={styles.tenderedValue}>
+                        £{tendered || "0.00"}
+                      </Text>
+                    </View>
+                    {tenderedAmount > 0 && (
+                      <View
+                        style={[
+                          styles.changeDisplay,
+                          partialChange >= 0
+                            ? styles.changePositive
+                            : styles.changeNegative,
+                        ]}
+                      >
+                        <Text style={styles.changeLabel}>
+                          {partialChange >= 0 ? "Change" : "Short by"}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.changeValue,
+                            partialChange < 0 && { color: theme.colors.error },
+                          ]}
+                        >
+                          £{Math.abs(partialChange).toFixed(2)}
+                        </Text>
+                      </View>
+                    )}
+                  </>
+                );
+              })()}
+              <View style={styles.numpad}>
+                {["1","2","3","4","5","6","7","8","9",".","0","⌫"].map((key) => (
+                  <TouchableOpacity
+                    key={key}
+                    style={styles.numpadKey}
+                    onPress={() => handleNumpad(key)}
+                  >
+                    <Text style={styles.numpadKeyText}>{key}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* ── Full cash flow ── */}
           {screen === "CASH" && (
             <View style={styles.cashFlow}>
               <View style={styles.flowHeader}>
@@ -307,7 +745,9 @@ export default function PaymentScreen({ route, navigation }: any) {
                 </TouchableOpacity>
                 <Text style={styles.panelTitle}>Cash Payment</Text>
               </View>
-              <Text style={styles.totalDue}>£{total.toFixed(2)}</Text>
+              <Text style={styles.totalDue}>
+                £{remainingBalance.toFixed(2)}
+              </Text>
               <Text style={styles.totalDueLabel}>
                 Tap a quick amount or enter below
               </Text>
@@ -347,20 +787,7 @@ export default function PaymentScreen({ route, navigation }: any) {
                 </View>
               )}
               <View style={styles.numpad}>
-                {[
-                  "1",
-                  "2",
-                  "3",
-                  "4",
-                  "5",
-                  "6",
-                  "7",
-                  "8",
-                  "9",
-                  ".",
-                  "0",
-                  "⌫",
-                ].map((key) => (
+                {["1","2","3","4","5","6","7","8","9",".","0","⌫"].map((key) => (
                   <TouchableOpacity
                     key={key}
                     style={styles.numpadKey}
@@ -382,7 +809,9 @@ export default function PaymentScreen({ route, navigation }: any) {
                 </TouchableOpacity>
                 <Text style={styles.panelTitle}>Split Payment</Text>
               </View>
-              <Text style={styles.totalDue}>£{total.toFixed(2)}</Text>
+              <Text style={styles.totalDue}>
+                £{remainingBalance.toFixed(2)}
+              </Text>
               <Text style={styles.totalDueLabel}>Split equally between</Text>
               <View style={styles.splitControls}>
                 <TouchableOpacity
@@ -415,7 +844,7 @@ export default function PaymentScreen({ route, navigation }: any) {
             </View>
           )}
 
-          {/* ── Split collect — choose method for this portion ── */}
+          {/* ── Split collect ── */}
           {screen === "SPLIT_COLLECT" && (
             <View style={styles.splitCollect}>
               <View style={styles.portionBadge}>
@@ -507,20 +936,7 @@ export default function PaymentScreen({ route, navigation }: any) {
                 </View>
               )}
               <View style={styles.numpad}>
-                {[
-                  "1",
-                  "2",
-                  "3",
-                  "4",
-                  "5",
-                  "6",
-                  "7",
-                  "8",
-                  "9",
-                  ".",
-                  "0",
-                  "⌫",
-                ].map((key) => (
+                {["1","2","3","4","5","6","7","8","9",".","0","⌫"].map((key) => (
                   <TouchableOpacity
                     key={key}
                     style={styles.numpadKey}
@@ -651,6 +1067,7 @@ const styles = StyleSheet.create({
     borderBottomColor: theme.colors.border,
     gap: 8,
   },
+  summaryItemPaid: { opacity: 0.4 },
   summaryItemQty: {
     fontSize: theme.fontSize.md,
     fontWeight: theme.fontWeight.bold,
@@ -666,6 +1083,10 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.md,
     fontWeight: theme.fontWeight.bold,
     color: theme.colors.textPrimary,
+  },
+  summaryItemPricePaid: {
+    textDecorationLine: "line-through",
+    color: theme.colors.textMuted,
   },
   summaryTotals: {
     paddingTop: 12,
@@ -728,6 +1149,129 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.lg,
     fontWeight: theme.fontWeight.bold,
     color: theme.colors.textPrimary,
+  },
+  partialButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+    marginTop: 20,
+    padding: 16,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  partialButtonIcon: {
+    fontSize: 28,
+    color: theme.colors.textSecondary,
+  },
+  partialButtonLabel: {
+    fontSize: theme.fontSize.md,
+    fontWeight: theme.fontWeight.bold,
+    color: theme.colors.textPrimary,
+  },
+  partialButtonSub: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.textSecondary,
+    marginTop: 2,
+  },
+  partialModeSelect: { flex: 1 },
+  partialModeHint: {
+    fontSize: theme.fontSize.md,
+    color: theme.colors.textSecondary,
+    marginBottom: 20,
+  },
+  partialModeButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+    padding: 20,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    marginBottom: 12,
+  },
+  partialModeIcon: {
+    fontSize: 32,
+    color: theme.colors.primary,
+    minWidth: 40,
+    textAlign: "center",
+  },
+  partialModeLabel: {
+    fontSize: theme.fontSize.lg,
+    fontWeight: theme.fontWeight.bold,
+    color: theme.colors.textPrimary,
+  },
+  partialModeSub: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.textSecondary,
+    marginTop: 2,
+  },
+  partialItems: { flex: 1 },
+  itemSelectList: { flex: 1 },
+  itemSelectRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+    gap: 10,
+    borderRadius: theme.borderRadius.sm,
+  },
+  itemSelectRowSelected: {
+    backgroundColor: `${theme.colors.primary}10`,
+  },
+  itemSelectCheck: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: theme.colors.border,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  itemSelectCheckSelected: {
+    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.primary,
+  },
+  itemSelectCheckMark: {
+    color: theme.colors.white,
+    fontSize: 14,
+    fontWeight: theme.fontWeight.bold,
+  },
+  itemSelectQty: {
+    fontSize: theme.fontSize.md,
+    fontWeight: theme.fontWeight.bold,
+    color: theme.colors.primary,
+    minWidth: 28,
+  },
+  itemSelectName: {
+    flex: 1,
+    fontSize: theme.fontSize.md,
+    color: theme.colors.textPrimary,
+  },
+  itemSelectPrice: {
+    fontSize: theme.fontSize.md,
+    fontWeight: theme.fontWeight.bold,
+    color: theme.colors.textPrimary,
+  },
+  partialItemsFooter: {
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+    gap: 10,
+  },
+  partialItemsTotal: {
+    fontSize: theme.fontSize.xl,
+    fontWeight: theme.fontWeight.bold,
+    color: theme.colors.primary,
+    textAlign: "center",
+  },
+  partialItemsButtons: {
+    flexDirection: "row",
+    gap: 12,
   },
   cashFlow: { flex: 1 },
   splitSetup: { flex: 1, alignItems: "center" },
@@ -884,4 +1428,5 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.md,
     fontWeight: theme.fontWeight.bold,
   },
+  modeSelect: { flex: 1 },
 });

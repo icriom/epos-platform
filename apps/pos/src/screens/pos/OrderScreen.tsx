@@ -56,11 +56,16 @@ interface Order {
   subtotal: string;
   vatTotal: string;
   total: string;
+  amountPaid: string;
   items: OrderItem[];
 }
 
 export default function OrderScreen({ route, navigation }: any) {
-  const { table, sessionId: paramSessionId } = route.params ?? {};
+  const {
+    table,
+    sessionId: paramSessionId,
+    existingOrderId, // passed from TablePlanScreen when reopening a table
+  } = route.params ?? {};
   const { staff, venueId } = useAuthStore();
 
   const [categories, setCategories] = useState<MenuCategory[]>([]);
@@ -82,6 +87,7 @@ export default function OrderScreen({ route, navigation }: any) {
 
   const initialise = async () => {
     try {
+      // Load menu
       const menuResponse = await menuApi.getMenu(venueId!);
       const menus = menuResponse.data.data;
       if (menus.length > 0) {
@@ -90,6 +96,7 @@ export default function OrderScreen({ route, navigation }: any) {
         if (cats.length > 0) setActiveCategory(cats[0].id);
       }
 
+      // Resolve session
       let resolvedSessionId = paramSessionId;
       if (!resolvedSessionId) {
         const sessionResponse = await sessionApi.getCurrentSession(venueId!);
@@ -97,26 +104,35 @@ export default function OrderScreen({ route, navigation }: any) {
         setSessionId(resolvedSessionId);
       }
 
-      const orderPayload = table
-        ? {
-            venueId: venueId!,
-            sessionId: resolvedSessionId,
-            staffId: staff!.id,
-            tableId: table.id,
-            covers: table.covers,
-            orderType: "TABLE",
-          }
-        : {
-            venueId: venueId!,
-            sessionId: resolvedSessionId,
-            staffId: staff!.id,
-            orderType: "WALK_IN",
-          };
+      if (existingOrderId) {
+        // ── Reopen an existing table order ──────────────────────────────────
+        const orderResponse = await orderApi.getOrder(existingOrderId);
+        const existingOrder = orderResponse.data.data;
+        setOrderId(existingOrder.id);
+        setOrder(existingOrder);
+      } else {
+        // ── Create a new order (walk-in or new table) ────────────────────────
+        const orderPayload = table
+          ? {
+              venueId: venueId!,
+              sessionId: resolvedSessionId,
+              staffId: staff!.id,
+              tableId: table.id,
+              covers: table.covers,
+              orderType: "TABLE",
+            }
+          : {
+              venueId: venueId!,
+              sessionId: resolvedSessionId,
+              staffId: staff!.id,
+              orderType: "WALK_IN",
+            };
 
-      const orderResponse = await orderApi.createOrder(orderPayload);
-      const newOrder = orderResponse.data.data;
-      setOrderId(newOrder.id);
-      setOrder(newOrder);
+        const orderResponse = await orderApi.createOrder(orderPayload);
+        const newOrder = orderResponse.data.data;
+        setOrderId(newOrder.id);
+        setOrder(newOrder);
+      }
     } catch (error) {
       Alert.alert("Error", "Could not initialise order");
     } finally {
@@ -214,6 +230,7 @@ export default function OrderScreen({ route, navigation }: any) {
     }
   };
 
+  // For walk-in orders: cancel and void the order
   const handleCancelSale = () => {
     Alert.alert(
       "Cancel Sale",
@@ -236,12 +253,18 @@ export default function OrderScreen({ route, navigation }: any) {
     );
   };
 
+  // For table orders: store the table and return to the floor plan.
+  // The order stays OPEN — the table will show as occupied (green) on return.
+  const handleStoreTable = () => {
+    navigation.navigate("TablePlan", { sessionId });
+  };
+
   const handlePay = () => {
     if (!order || !order.items || order.items.length === 0) {
       Alert.alert("No Items", "Add items to the order first");
       return;
     }
-    navigation.navigate("Payment", { order });
+    navigation.navigate("Payment", { order, table });
   };
 
   const handleSendToKitchen = async () => {
@@ -251,13 +274,17 @@ export default function OrderScreen({ route, navigation }: any) {
     }
     await orderApi.updateStatus(orderId!, "SENT");
     Alert.alert("Sent to Kitchen", `Order #${order.orderNumber} sent`);
-    navigation.replace("Order");
+    // For table orders stay on the screen; for walk-ins replace
+    if (!table) {
+      navigation.replace("Order");
+    }
   };
 
   const handleOpenTables = () => {
     navigation.navigate("TablePlan", { sessionId });
   };
 
+  const isTableOrder = !!table;
   const orderTitle = table ? `Table ${table.tableNumber}` : "Walk-in";
   const orderSubtitle = table ? `${table.covers} covers` : "No table assigned";
   const activeItems =
@@ -265,12 +292,21 @@ export default function OrderScreen({ route, navigation }: any) {
   const availableItems = activeItems.filter((i) => i.isAvailable);
   const hasItems = (order?.items ?? []).length > 0;
 
+  const totalAmount = parseFloat(order?.total ?? "0");
+  const amountPaid = parseFloat(order?.amountPaid ?? "0");
+  const remainingBalance = Math.max(0, totalAmount - amountPaid);
+  const hasPartialPayment = amountPaid > 0;
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={theme.colors.primary} />
         <Text style={styles.loadingText}>
-          {table ? "Opening table..." : "Opening till..."}
+          {existingOrderId
+            ? "Reopening table..."
+            : table
+            ? "Opening table..."
+            : "Opening till..."}
         </Text>
       </View>
     );
@@ -390,8 +426,11 @@ export default function OrderScreen({ route, navigation }: any) {
             {(order?.items ?? []).map((item) => (
               <TouchableOpacity
                 key={item.id}
-                style={styles.orderItem}
-                onPress={() => handleItemPress(item)}
+                style={[
+                  styles.orderItem,
+                  item.status === "PAID" && styles.orderItemPaid,
+                ]}
+                onPress={() => item.status !== "PAID" && handleItemPress(item)}
                 activeOpacity={0.7}
               >
                 <View style={styles.orderItemLeft}>
@@ -400,12 +439,20 @@ export default function OrderScreen({ route, navigation }: any) {
                     <Text style={styles.orderItemName}>
                       {item.menuItemName}
                     </Text>
+                    {item.status === "PAID" && (
+                      <Text style={styles.orderItemPaidLabel}>Paid</Text>
+                    )}
                     {item.notes ? (
                       <Text style={styles.orderItemNotes}>{item.notes}</Text>
                     ) : null}
                   </View>
                 </View>
-                <Text style={styles.orderItemPrice}>
+                <Text
+                  style={[
+                    styles.orderItemPrice,
+                    item.status === "PAID" && styles.orderItemPricePaid,
+                  ]}
+                >
                   £{parseFloat(item.lineTotal).toFixed(2)}
                 </Text>
               </TouchableOpacity>
@@ -429,32 +476,75 @@ export default function OrderScreen({ route, navigation }: any) {
             <View style={[styles.totalRow, styles.totalRowFinal]}>
               <Text style={styles.totalLabelFinal}>Total</Text>
               <Text style={styles.totalValueFinal}>
-                £{parseFloat(order?.total ?? "0").toFixed(2)}
+                £{totalAmount.toFixed(2)}
               </Text>
             </View>
 
-            {/* Pay + Cancel row */}
+            {/* Partial payment balance banner */}
+            {hasPartialPayment && (
+              <View style={styles.balanceBanner}>
+                <View style={styles.balanceRow}>
+                  <Text style={styles.balanceLabel}>Paid</Text>
+                  <Text style={styles.balancePaid}>
+                    £{amountPaid.toFixed(2)}
+                  </Text>
+                </View>
+                <View style={styles.balanceRow}>
+                  <Text style={styles.balanceLabel}>Remaining</Text>
+                  <Text style={styles.balanceRemaining}>
+                    £{remainingBalance.toFixed(2)}
+                  </Text>
+                </View>
+              </View>
+            )}
+
+            {/* Action buttons */}
             <View style={styles.actionRow}>
-              <TouchableOpacity
-                style={[
-                  styles.cancelButton,
-                  !hasItems && styles.cancelButtonDisabled,
-                ]}
-                onPress={handleCancelSale}
-                disabled={!hasItems}
-              >
-                <Text style={styles.cancelButtonText}>✕ Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.payButton,
-                  !hasItems && styles.payButtonDisabled,
-                ]}
-                onPress={handlePay}
-                disabled={!hasItems}
-              >
-                <Text style={styles.payButtonText}>💳 Pay</Text>
-              </TouchableOpacity>
+              {isTableOrder ? (
+                // Table order: Store Table (park it) or Cancel
+                <>
+                  <TouchableOpacity
+                    style={styles.storeButton}
+                    onPress={handleStoreTable}
+                  >
+                    <Text style={styles.storeButtonText}>⊞ Store Table</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.payButton,
+                      !hasItems && styles.payButtonDisabled,
+                    ]}
+                    onPress={handlePay}
+                    disabled={!hasItems}
+                  >
+                    <Text style={styles.payButtonText}>💳 Pay</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                // Walk-in: Cancel or Pay
+                <>
+                  <TouchableOpacity
+                    style={[
+                      styles.cancelButton,
+                      !hasItems && styles.cancelButtonDisabled,
+                    ]}
+                    onPress={handleCancelSale}
+                    disabled={!hasItems}
+                  >
+                    <Text style={styles.cancelButtonText}>✕ Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.payButton,
+                      !hasItems && styles.payButtonDisabled,
+                    ]}
+                    onPress={handlePay}
+                    disabled={!hasItems}
+                  >
+                    <Text style={styles.payButtonText}>💳 Pay</Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
           </View>
         </View>
@@ -672,6 +762,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
+  orderItemPaid: {
+    opacity: 0.5,
+  },
   orderItemLeft: {
     flexDirection: "row",
     alignItems: "center",
@@ -688,6 +781,12 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.md,
     color: theme.colors.textPrimary,
   },
+  orderItemPaidLabel: {
+    fontSize: theme.fontSize.xs,
+    color: theme.colors.success,
+    fontWeight: theme.fontWeight.bold,
+    marginTop: 2,
+  },
   orderItemNotes: {
     fontSize: theme.fontSize.xs,
     color: theme.colors.textSecondary,
@@ -697,6 +796,10 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.md,
     fontWeight: theme.fontWeight.bold,
     color: theme.colors.textPrimary,
+  },
+  orderItemPricePaid: {
+    color: theme.colors.textMuted,
+    textDecorationLine: "line-through",
   },
   totals: {
     padding: 16,
@@ -726,7 +829,47 @@ const styles = StyleSheet.create({
     fontWeight: theme.fontWeight.bold,
     color: theme.colors.primary,
   },
+  balanceBanner: {
+    backgroundColor: `${theme.colors.warning}18`,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: `${theme.colors.warning}50`,
+    padding: 10,
+    gap: 4,
+    marginTop: 4,
+  },
+  balanceRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+  balanceLabel: {
+    fontSize: theme.fontSize.sm,
+    color: theme.colors.textSecondary,
+  },
+  balancePaid: {
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.bold,
+    color: theme.colors.success,
+  },
+  balanceRemaining: {
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.bold,
+    color: theme.colors.warning,
+  },
   actionRow: { flexDirection: "row", gap: 8, marginTop: 12 },
+  storeButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    alignItems: "center",
+  },
+  storeButtonText: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.fontSize.md,
+    fontWeight: theme.fontWeight.medium,
+  },
   cancelButton: {
     flex: 1,
     paddingVertical: 10,

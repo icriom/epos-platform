@@ -54,7 +54,8 @@ model Venue {
   locations       Location[]
   staff           Staff[]
   devices         Device[]
-  menus   Menu[]
+  menus           Menu[]
+
   @@map("venues")
 }
 
@@ -76,23 +77,23 @@ model Location {
 }
 
 model Staff {
-  id                String       @id @default(uuid())
-  venueId           String
-  firstName         String
-  lastName          String
-  displayName       String
-  email             String?
-  pinHash           String
-  roleId            String?
-  photoUrl          String?
-  isActive          Boolean      @default(true)
-  backOfficeAccess  Boolean      @default(false)
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
-  deletedAt         DateTime?
-  venue             Venue        @relation(fields: [venueId], references: [id])
-  role              Role?        @relation(fields: [roleId], references: [id])
-  clockEvents       ClockEvent[]
+  id               String       @id @default(uuid())
+  venueId          String
+  firstName        String
+  lastName         String
+  displayName      String
+  email            String?
+  pinHash          String
+  roleId           String?
+  photoUrl         String?
+  isActive         Boolean      @default(true)
+  backOfficeAccess Boolean      @default(false)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  deletedAt        DateTime?
+  venue            Venue        @relation(fields: [venueId], references: [id])
+  role             Role?        @relation(fields: [roleId], references: [id])
+  clockEvents      ClockEvent[]
 
   @@map("staff")
 }
@@ -172,32 +173,32 @@ model MenuCategory {
 }
 
 model MenuItem {
-  id              String              @id @default(uuid())
-  venueId         String
-  categoryId      String
-  name            String
-  description     String?
-  pluCode         String
-  barcode         String?
-  basePrice       Decimal             @db.Decimal(10, 2)
-  costPrice       Decimal?            @db.Decimal(10, 2)
-  vatType         String              @default("EAT_IN")
-  vatRate         Decimal             @db.Decimal(5, 2)
-  course          String?
-  kitchenStation  String?
-  prepTimeMins    Int?
-  imageUrl        String?
-  isAvailable     Boolean             @default(true)
-  isArchived      Boolean             @default(false)
-  sortOrder       Int                 @default(0)
-  calories        Int?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
-  deletedAt       DateTime?
-  category        MenuCategory        @relation(fields: [categoryId], references: [id])
-  allergens       MenuItemAllergen[]
-  modifierGroups  MenuItemModifierGroup[]
-  prices          MenuItemPrice[]
+  id             String                  @id @default(uuid())
+  venueId        String
+  categoryId     String
+  name           String
+  description    String?
+  pluCode        String
+  barcode        String?
+  basePrice      Decimal                 @db.Decimal(10, 2)
+  costPrice      Decimal?                @db.Decimal(10, 2)
+  vatType        String                  @default("EAT_IN")
+  vatRate        Decimal                 @db.Decimal(5, 2)
+  course         String?
+  kitchenStation String?
+  prepTimeMins   Int?
+  imageUrl       String?
+  isAvailable    Boolean                 @default(true)
+  isArchived     Boolean                 @default(false)
+  sortOrder      Int                     @default(0)
+  calories       Int?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+  deletedAt      DateTime?
+  category       MenuCategory            @relation(fields: [categoryId], references: [id])
+  allergens      MenuItemAllergen[]
+  modifierGroups MenuItemModifierGroup[]
+  prices         MenuItemPrice[]
 
   @@map("menu_items")
 }
@@ -280,13 +281,13 @@ model MenuItemPrice {
 }
 
 model Role {
-  id          String       @id @default(uuid())
+  id          String   @id @default(uuid())
   venueId     String?
   name        String
   description String?
-  isSystem    Boolean      @default(false)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
   staff       Staff[]
 
   @@map("roles")
@@ -324,51 +325,53 @@ model AuditLog {
 }
 
 model TradingSession {
-  id               String    @id @default(uuid())
-  venueId          String
-  locationId       String?
-  openedBy         String
-  closedBy         String?
-  openedAt         DateTime  @default(now())
-  closedAt         DateTime?
-  status           String    @default("OPEN")
-  cashFloatAmount  Decimal?  @db.Decimal(10, 2)
-  cashDeclared     Decimal?  @db.Decimal(10, 2)
-  cashExpected     Decimal?  @db.Decimal(10, 2)
-  cashVariance     Decimal?  @db.Decimal(10, 2)
-  notes            String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id              String    @id @default(uuid())
+  venueId         String
+  locationId      String?
+  openedBy        String
+  closedBy        String?
+  openedAt        DateTime  @default(now())
+  closedAt        DateTime?
+  status          String    @default("OPEN")
+  cashFloatAmount Decimal?  @db.Decimal(10, 2)
+  cashDeclared    Decimal?  @db.Decimal(10, 2)
+  cashExpected    Decimal?  @db.Decimal(10, 2)
+  cashVariance    Decimal?  @db.Decimal(10, 2)
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@map("trading_sessions")
 }
+
 model Order {
-  id               String         @id @default(uuid())
-  venueId          String
-  locationId       String?
-  sessionId        String
-  deviceId         String?
-  staffId          String
-  tableId          String?
-  orderNumber      Int
-  orderType        String         @default("TABLE")
-  status           String         @default("OPEN")
-  covers           Int?
-  tabName          String?
-  notes            String?
-  subtotal         Decimal        @default(0) @db.Decimal(10, 2)
-  vatTotal         Decimal        @default(0) @db.Decimal(10, 2)
-  discountTotal    Decimal        @default(0) @db.Decimal(10, 2)
-  serviceCharge    Decimal        @default(0) @db.Decimal(10, 2)
-  total            Decimal        @default(0) @db.Decimal(10, 2)
-  openedAt         DateTime       @default(now())
-  firstSentAt      DateTime?
-  paidAt           DateTime?
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
-  items            OrderItem[]
-  payments         Payment[]
-  discounts        Discount[]
+  id            String      @id @default(uuid())
+  venueId       String
+  locationId    String?
+  sessionId     String
+  deviceId      String?
+  staffId       String
+  tableId       String?
+  orderNumber   Int
+  orderType     String      @default("TABLE")
+  status        String      @default("OPEN")
+  covers        Int?
+  tabName       String?
+  notes         String?
+  subtotal      Decimal     @default(0) @db.Decimal(10, 2)
+  vatTotal      Decimal     @default(0) @db.Decimal(10, 2)
+  discountTotal Decimal     @default(0) @db.Decimal(10, 2)
+  serviceCharge Decimal     @default(0) @db.Decimal(10, 2)
+  total         Decimal     @default(0) @db.Decimal(10, 2)
+  amountPaid    Decimal     @default(0) @db.Decimal(10, 2)
+  openedAt      DateTime    @default(now())
+  firstSentAt   DateTime?
+  paidAt        DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  items         OrderItem[]
+  payments      Payment[]
+  discounts     Discount[]
 
   @@map("orders")
 }
@@ -412,61 +415,61 @@ model OrderItemModifier {
 }
 
 model Payment {
-  id                  String    @id @default(uuid())
-  orderId             String
-  sessionId           String
-  staffId             String
-  deviceId            String?
-  amount              Decimal   @db.Decimal(10, 2)
-  method              String
-  status              String    @default("PENDING")
-  currency            String    @default("GBP")
-  tipAmount           Decimal   @default(0) @db.Decimal(10, 2)
-  serviceCharge       Decimal   @default(0) @db.Decimal(10, 2)
-  serviceChargeType   String?
-  cardScheme          String?
-  cardLastFour        String?
-  terminalId          String?
-  transactionRef      String?
-  authorisationCode   String?
-  isContactless       Boolean?
-  isSoftpos           Boolean   @default(false)
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
-  order               Order     @relation(fields: [orderId], references: [id])
-  refunds             Refund[]
+  id                String   @id @default(uuid())
+  orderId           String
+  sessionId         String
+  staffId           String
+  deviceId          String?
+  amount            Decimal  @db.Decimal(10, 2)
+  method            String
+  status            String   @default("PENDING")
+  currency          String   @default("GBP")
+  tipAmount         Decimal  @default(0) @db.Decimal(10, 2)
+  serviceCharge     Decimal  @default(0) @db.Decimal(10, 2)
+  serviceChargeType String?
+  cardScheme        String?
+  cardLastFour      String?
+  terminalId        String?
+  transactionRef    String?
+  authorisationCode String?
+  isContactless     Boolean?
+  isSoftpos         Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  order             Order    @relation(fields: [orderId], references: [id])
+  refunds           Refund[]
 
   @@map("payments")
 }
 
 model Refund {
-  id              String   @id @default(uuid())
-  paymentId       String
-  orderId         String
-  processedBy     String
-  authorisedBy    String?
-  amount          Decimal  @db.Decimal(10, 2)
-  refundType      String
-  method          String
-  reason          String?
-  createdAt       DateTime @default(now())
-  payment         Payment  @relation(fields: [paymentId], references: [id])
+  id           String   @id @default(uuid())
+  paymentId    String
+  orderId      String
+  processedBy  String
+  authorisedBy String?
+  amount       Decimal  @db.Decimal(10, 2)
+  refundType   String
+  method       String
+  reason       String?
+  createdAt    DateTime @default(now())
+  payment      Payment  @relation(fields: [paymentId], references: [id])
 
   @@map("refunds")
 }
 
 model Discount {
-  id            String   @id @default(uuid())
-  orderId       String
-  orderItemId   String?
-  appliedBy     String
-  authorisedBy  String?
-  discountType  String
-  value         Decimal  @db.Decimal(10, 2)
-  amountSaved   Decimal  @db.Decimal(10, 2)
-  reason        String?
-  createdAt     DateTime @default(now())
-  order         Order    @relation(fields: [orderId], references: [id])
+  id           String   @id @default(uuid())
+  orderId      String
+  orderItemId  String?
+  appliedBy    String
+  authorisedBy String?
+  discountType String
+  value        Decimal  @db.Decimal(10, 2)
+  amountSaved  Decimal  @db.Decimal(10, 2)
+  reason       String?
+  createdAt    DateTime @default(now())
+  order        Order    @relation(fields: [orderId], references: [id])
 
   @@map("discounts")
 }
@@ -485,22 +488,22 @@ model TablePlan {
 }
 
 model TableLayout {
-  id                   String      @id @default(uuid())
-  tablePlanId          String
-  tableNumber          String
-  covers               Int
-  shape                String      @default("SQUARE")
-  posX                 Decimal     @db.Decimal(8, 2)
-  posY                 Decimal     @db.Decimal(8, 2)
-  width                Decimal     @db.Decimal(8, 2)
-  height               Decimal     @db.Decimal(8, 2)
-  rotation             Int         @default(0)
-  isActive             Boolean     @default(true)
-  inactivityAlertMins  Int?
-  createdAt            DateTime    @default(now())
-  updatedAt            DateTime    @updatedAt
-  tablePlan            TablePlan   @relation(fields: [tablePlanId], references: [id])
-  notes                TableNote[]
+  id                  String      @id @default(uuid())
+  tablePlanId         String
+  tableNumber         String
+  covers              Int
+  shape               String      @default("SQUARE")
+  posX                Decimal     @db.Decimal(8, 2)
+  posY                Decimal     @db.Decimal(8, 2)
+  width               Decimal     @db.Decimal(8, 2)
+  height              Decimal     @db.Decimal(8, 2)
+  rotation            Int         @default(0)
+  isActive            Boolean     @default(true)
+  inactivityAlertMins Int?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+  tablePlan           TablePlan   @relation(fields: [tablePlanId], references: [id])
+  notes               TableNote[]
 
   @@map("table_layouts")
 }

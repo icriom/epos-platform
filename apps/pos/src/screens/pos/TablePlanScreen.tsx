@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -9,8 +9,9 @@ import {
   SafeAreaView,
   Alert,
 } from "react-native";
+import { useFocusEffect } from "@react-navigation/native";
 import { theme } from "../../theme";
-import { tableApi, sessionApi } from "../../services/api";
+import { tableApi, sessionApi, orderApi } from "../../services/api";
 import { useAuthStore } from "../../store/authStore";
 
 interface Table {
@@ -31,18 +32,40 @@ interface TablePlan {
   tables: Table[];
 }
 
+// Minimal shape for an open order on the floor plan
+interface OpenTableOrder {
+  id: string;
+  tableId: string;
+  amountPaid: string;
+  total: string;
+  orderNumber: number;
+}
+
 export default function TablePlanScreen({ route, navigation }: any) {
   const { sessionId: paramSessionId } = route.params ?? {};
   const [plans, setPlans] = useState<TablePlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [activePlan, setActivePlan] = useState(0);
+  // Map of tableId → OpenTableOrder for quick lookup
+  const [openTableOrders, setOpenTableOrders] = useState<
+    Record<string, OpenTableOrder>
+  >({});
   const { staff, venueId, sessionId, setSession, logout } = useAuthStore();
 
+  // Load the floor plan once on mount
   useEffect(() => {
-    loadData();
+    loadFloorPlan();
   }, []);
 
-  const loadData = async () => {
+  // Refresh table statuses every time the screen comes into focus
+  // (e.g. returning from OrderScreen after storing or paying a table)
+  useFocusEffect(
+    useCallback(() => {
+      refreshTableStatuses();
+    }, [venueId]),
+  );
+
+  const loadFloorPlan = async () => {
     try {
       const plansResponse = await tableApi.getTablePlan(venueId!);
       setPlans(plansResponse.data.data);
@@ -64,6 +87,22 @@ export default function TablePlanScreen({ route, navigation }: any) {
     }
   };
 
+  // Fetch all open orders that have a tableId, build a lookup map
+  const refreshTableStatuses = async () => {
+    if (!venueId) return;
+    try {
+      const response = await orderApi.getOpenTableOrders(venueId);
+      const orders: OpenTableOrder[] = response.data.data ?? [];
+      const map: Record<string, OpenTableOrder> = {};
+      orders.forEach((o) => {
+        if (o.tableId) map[o.tableId] = o;
+      });
+      setOpenTableOrders(map);
+    } catch {
+      // Non-fatal — floor plan still shows, just without live status
+    }
+  };
+
   const handleTablePress = async (table: Table) => {
     if (!sessionId) {
       Alert.alert(
@@ -76,7 +115,20 @@ export default function TablePlanScreen({ route, navigation }: any) {
       );
       return;
     }
-    navigation.navigate("Order", { table, sessionId });
+
+    const existingOrder = openTableOrders[table.id];
+
+    if (existingOrder) {
+      // Table is occupied — reopen the existing order
+      navigation.navigate("Order", {
+        table,
+        sessionId,
+        existingOrderId: existingOrder.id,
+      });
+    } else {
+      // Table is empty — open a new order
+      navigation.navigate("Order", { table, sessionId });
+    }
   };
 
   const openSession = async (table?: Table) => {
@@ -94,8 +146,18 @@ export default function TablePlanScreen({ route, navigation }: any) {
     }
   };
 
-  const getTableStatusColour = (_table: Table) => {
-    return theme.colors.tableAvailable;
+  // Determine the border/fill colour for a table tile
+  const getTableStatusColour = (table: Table): string => {
+    const openOrder = openTableOrders[table.id];
+    if (!openOrder) return theme.colors.tableAvailable;
+
+    const amountPaid = parseFloat(openOrder.amountPaid);
+    if (amountPaid > 0) {
+      // Partial payment has been taken — show payment colour
+      return theme.colors.tablePayment;
+    }
+    // Order open, nothing paid yet — occupied
+    return theme.colors.tableOccupied;
   };
 
   if (loading) {
@@ -161,6 +223,7 @@ export default function TablePlanScreen({ route, navigation }: any) {
         <View style={styles.floorPlan}>
           {currentPlan?.tables.map((table) => {
             const statusColour = getTableStatusColour(table);
+            const openOrder = openTableOrders[table.id];
             return (
               <TouchableOpacity
                 key={table.id}
@@ -186,6 +249,11 @@ export default function TablePlanScreen({ route, navigation }: any) {
                   {table.tableNumber}
                 </Text>
                 <Text style={styles.tableCovers}>{table.covers} cvr</Text>
+                {openOrder && (
+                  <Text style={[styles.tableOrderBadge, { color: statusColour }]}>
+                    #{openOrder.orderNumber}
+                  </Text>
+                )}
               </TouchableOpacity>
             );
           })}
@@ -219,7 +287,7 @@ export default function TablePlanScreen({ route, navigation }: any) {
               { backgroundColor: theme.colors.tablePayment },
             ]}
           />
-          <Text style={styles.legendText}>Payment</Text>
+          <Text style={styles.legendText}>Part Paid</Text>
         </View>
         <View style={styles.statusLegend}>
           <View
@@ -344,6 +412,11 @@ const styles = StyleSheet.create({
   tableCovers: {
     fontSize: theme.fontSize.xs,
     color: theme.colors.textSecondary,
+    marginTop: 2,
+  },
+  tableOrderBadge: {
+    fontSize: theme.fontSize.xs,
+    fontWeight: theme.fontWeight.bold,
     marginTop: 2,
   },
   statusBar: {

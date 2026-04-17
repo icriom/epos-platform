@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import prisma from "../../lib/prisma";
 
 export default async function orderRoutes(fastify: FastifyInstance) {
+  // ─── Create order ───────────────────────────────────────────────────────────
   fastify.post<{
     Body: {
       venueId: string;
@@ -51,6 +52,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // ─── Add item to order ──────────────────────────────────────────────────────
   fastify.post<{
     Params: { id: string };
     Body: {
@@ -143,6 +145,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // ─── Get order by ID ────────────────────────────────────────────────────────
   fastify.get<{ Params: { id: string } }>("/:id", async (request, reply) => {
     try {
       const order = await prisma.order.findUnique({
@@ -170,6 +173,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // ─── Get orders by session ──────────────────────────────────────────────────
   fastify.get<{ Params: { sessionId: string } }>(
     "/session/:sessionId",
     async (request, reply) => {
@@ -191,6 +195,71 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     },
   );
 
+  // ─── Get open order for a table ─────────────────────────────────────────────
+  // Returns the current OPEN order for a given tableId, or null if none exists.
+  // Used by TablePlanScreen to colour tables and by OrderScreen to reopen them.
+  fastify.get<{ Params: { tableId: string } }>(
+    "/table/:tableId/open",
+    async (request, reply) => {
+      try {
+        const order = await prisma.order.findFirst({
+          where: {
+            tableId: request.params.tableId,
+            status: "OPEN",
+          },
+          include: {
+            items: {
+              where: { status: { not: "VOID" } },
+              include: { modifiers: true },
+              orderBy: { createdAt: "asc" },
+            },
+            payments: true,
+            discounts: true,
+          },
+          orderBy: { openedAt: "desc" },
+        });
+
+        // Return null data (not 404) so the client can distinguish
+        // "no open order" from a real error
+        return { success: true, data: order ?? null };
+      } catch (error) {
+        reply.status(500);
+        return { success: false, error: "Failed to check table order" };
+      }
+    },
+  );
+
+  // ─── Get open orders for all tables in a venue (for floor plan colouring) ──
+  // Returns an array of { tableId, orderId, amountPaid, total } for all
+  // currently OPEN orders that have a tableId set.
+  fastify.get<{ Params: { venueId: string } }>(
+    "/venue/:venueId/open-tables",
+    async (request, reply) => {
+      try {
+        const orders = await prisma.order.findMany({
+          where: {
+            venueId: request.params.venueId,
+            status: "OPEN",
+            tableId: { not: null },
+          },
+          select: {
+            id: true,
+            tableId: true,
+            amountPaid: true,
+            total: true,
+            orderNumber: true,
+          },
+        });
+
+        return { success: true, data: orders };
+      } catch (error) {
+        reply.status(500);
+        return { success: false, error: "Failed to retrieve open tables" };
+      }
+    },
+  );
+
+  // ─── Update order status ────────────────────────────────────────────────────
   fastify.patch<{
     Params: { id: string };
     Body: { status: string };
@@ -208,7 +277,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // Update item quantity
+  // ─── Update item quantity ───────────────────────────────────────────────────
   fastify.patch<{
     Params: { id: string; itemId: string };
     Body: { quantity: number };
@@ -218,25 +287,23 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       const { id, itemId } = request.params;
 
       if (quantity <= 0) {
-        // Void the item if quantity reaches 0
         await prisma.orderItem.update({
           where: { id: itemId },
           data: { status: "VOID" },
         });
       } else {
-        const unitPrice = await prisma.orderItem.findUnique({
+        const existing = await prisma.orderItem.findUnique({
           where: { id: itemId },
           select: { unitPrice: true, vatRate: true },
         });
-        const lineTotal = Number(unitPrice!.unitPrice) * quantity;
-        const vatAmount = (lineTotal * Number(unitPrice!.vatRate)) / 100;
+        const lineTotal = Number(existing!.unitPrice) * quantity;
+        const vatAmount = (lineTotal * Number(existing!.vatRate)) / 100;
         await prisma.orderItem.update({
           where: { id: itemId },
           data: { quantity, lineTotal, vatAmount },
         });
       }
 
-      // Recalculate order totals
       const allItems = await prisma.orderItem.findMany({
         where: { orderId: id, status: { not: "VOID" } },
       });
@@ -273,7 +340,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // Void item
+  // ─── Void item ──────────────────────────────────────────────────────────────
   fastify.patch<{
     Params: { id: string; itemId: string };
   }>("/:id/items/:itemId/void", async (request, reply) => {
@@ -297,7 +364,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
         0,
       );
 
-      const order = await prisma.order.update({
+      await prisma.order.update({
         where: { id },
         data: { subtotal, vatTotal, total: subtotal },
       });
@@ -321,54 +388,144 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       return { success: false, error: "Failed to void item" };
     }
   });
-  // Record payment
-fastify.post<{
-  Params: { id: string };
-  Body: {
-    amount: number;
-    method: string;
-    amountTendered?: number;
-  };
-}>("/:id/payment", async (request, reply) => {
-  try {
-    const { id } = request.params;
-    const { amount, method, amountTendered } = request.body;
 
-    // Fetch order to get sessionId and staffId
-    const order = await prisma.order.findUnique({
-      where: { id },
-      select: { sessionId: true, staffId: true },
-    });
+  // ─── Record full payment ────────────────────────────────────────────────────
+  fastify.post<{
+    Params: { id: string };
+    Body: {
+      amount: number;
+      method: string;
+      amountTendered?: number;
+    };
+  }>("/:id/payment", async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const { amount, method, amountTendered } = request.body;
 
-    if (!order) {
-      reply.status(404);
-      return { success: false, error: "Order not found" };
+      const order = await prisma.order.findUnique({
+        where: { id },
+        select: { sessionId: true, staffId: true },
+      });
+
+      if (!order) {
+        reply.status(404);
+        return { success: false, error: "Order not found" };
+      }
+
+      await prisma.payment.create({
+        data: {
+          orderId: id,
+          sessionId: order.sessionId,
+          staffId: order.staffId,
+          amount,
+          method,
+          status: "COMPLETED",
+          currency: "GBP",
+        },
+      });
+
+      const updatedOrder = await prisma.order.update({
+        where: { id },
+        data: {
+          status: "PAID",
+          amountPaid: amount,
+          paidAt: new Date(),
+        },
+      });
+
+      return { success: true, data: updatedOrder };
+    } catch (error) {
+      reply.status(500);
+      return { success: false, error: "Failed to record payment" };
     }
+  });
 
-    await prisma.payment.create({
-      data: {
-        orderId: id,
-        sessionId: order.sessionId,
-        staffId: order.staffId,
-        amount,
-        method,
-        status: "COMPLETED",
-        currency: "GBP",
-      },
-    });
+  // ─── Record partial payment ─────────────────────────────────────────────────
+  // Takes a payment against an open order without closing it.
+  // The order stays OPEN with amountPaid updated.
+  // When amountPaid >= total the order is automatically closed.
+  fastify.post<{
+    Params: { id: string };
+    Body: {
+      amount: number;
+      method: string;
+      amountTendered?: number;
+      itemIds?: string[]; // optional — which items this payment covers
+    };
+  }>("/:id/partial-payment", async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const { amount, method, amountTendered, itemIds } = request.body;
 
-    const updatedOrder = await prisma.order.update({
-      where: { id },
-      data: {
-        status: "PAID",
-        paidAt: new Date(),
-      },
-    });
+      const order = await prisma.order.findUnique({
+        where: { id },
+        select: {
+          sessionId: true,
+          staffId: true,
+          total: true,
+          amountPaid: true,
+        },
+      });
 
-    return { success: true, data: updatedOrder };
-  } catch (error) {
-    reply.status(500);
-    return { success: false, error: "Failed to record payment" };
-  }
-});
+      if (!order) {
+        reply.status(404);
+        return { success: false, error: "Order not found" };
+      }
+
+      const newAmountPaid = Number(order.amountPaid) + amount;
+      const orderTotal = Number(order.total);
+      const isFullyPaid = newAmountPaid >= orderTotal;
+
+      // Record the payment transaction
+      await prisma.payment.create({
+        data: {
+          orderId: id,
+          sessionId: order.sessionId,
+          staffId: order.staffId,
+          amount,
+          method,
+          status: "COMPLETED",
+          currency: "GBP",
+        },
+      });
+
+      // Mark specific items as PAID if itemIds provided
+      if (itemIds && itemIds.length > 0) {
+        await prisma.orderItem.updateMany({
+          where: { id: { in: itemIds }, orderId: id },
+          data: { status: "PAID" },
+        });
+      }
+
+      // Update the order — close it if fully paid, otherwise keep OPEN
+      const updatedOrder = await prisma.order.update({
+        where: { id },
+        data: {
+          amountPaid: newAmountPaid,
+          ...(isFullyPaid
+            ? { status: "PAID", paidAt: new Date() }
+            : {}),
+        },
+        include: {
+          items: {
+            where: { status: { not: "VOID" } },
+            include: { modifiers: true },
+            orderBy: { createdAt: "asc" },
+          },
+          payments: true,
+          discounts: true,
+        },
+      });
+
+      return {
+        success: true,
+        data: updatedOrder,
+        isFullyPaid,
+        remainingBalance: Math.max(0, orderTotal - newAmountPaid),
+      };
+    } catch (error) {
+      reply.status(500);
+      return { success: false, error: "Failed to record partial payment" };
+    }
+  });
 }
