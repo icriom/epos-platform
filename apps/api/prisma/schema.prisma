@@ -345,33 +345,34 @@ model TradingSession {
 }
 
 model Order {
-  id            String      @id @default(uuid())
-  venueId       String
-  locationId    String?
-  sessionId     String
-  deviceId      String?
-  staffId       String
-  tableId       String?
-  orderNumber   Int
-  orderType     String      @default("TABLE")
-  status        String      @default("OPEN")
-  covers        Int?
-  tabName       String?
-  notes         String?
-  subtotal      Decimal     @default(0) @db.Decimal(10, 2)
-  vatTotal      Decimal     @default(0) @db.Decimal(10, 2)
-  discountTotal Decimal     @default(0) @db.Decimal(10, 2)
-  serviceCharge Decimal     @default(0) @db.Decimal(10, 2)
-  total         Decimal     @default(0) @db.Decimal(10, 2)
-  amountPaid    Decimal     @default(0) @db.Decimal(10, 2)
-  openedAt      DateTime    @default(now())
-  firstSentAt   DateTime?
-  paidAt        DateTime?
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-  items         OrderItem[]
-  payments      Payment[]
-  discounts     Discount[]
+  id             String      @id @default(uuid())
+  venueId        String
+  locationId     String?
+  sessionId      String
+  deviceId       String?
+  staffId        String
+  tableId        String?
+  orderNumber    Int
+  customerNumber Int?
+  orderType      String      @default("TABLE")
+  status         String      @default("OPEN")
+  covers         Int?
+  tabName        String?
+  notes          String?
+  subtotal       Decimal     @default(0) @db.Decimal(10, 2)
+  vatTotal       Decimal     @default(0) @db.Decimal(10, 2)
+  discountTotal  Decimal     @default(0) @db.Decimal(10, 2)
+  serviceCharge  Decimal     @default(0) @db.Decimal(10, 2)
+  total          Decimal     @default(0) @db.Decimal(10, 2)
+  amountPaid     Decimal     @default(0) @db.Decimal(10, 2)
+  openedAt       DateTime    @default(now())
+  firstSentAt    DateTime?
+  paidAt         DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  items          OrderItem[]
+  payments       Payment[]
+  discounts      Discount[]
 
   @@map("orders")
 }

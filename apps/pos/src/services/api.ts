@@ -91,17 +91,28 @@ export const orderApi = {
   updateStatus: (orderId: string, status: string) =>
     api.patch(`/api/orders/${orderId}/status`, { status }),
 
-  // Move an order to a different table. Destination must be empty.
-  // Returns a 409 with code: "TABLE_OCCUPIED" if the destination
-  // already has an open order.
   transferOrder: (orderId: string, tableId: string) =>
     api.patch(`/api/orders/${orderId}/transfer`, { tableId }),
 
-  updateItemQuantity: (orderId: string, itemId: string, quantity: number) =>
-    api.patch(`/api/orders/${orderId}/items/${itemId}/quantity`, { quantity }),
+  // Explicitly send all PENDING items on an order to the kitchen.
+  // Store Table and Pay flows call this automatically on the backend;
+  // this is for when staff want to fire items early (e.g. "fire starters now").
+  sendToKitchen: (orderId: string, staffId: string) =>
+    api.post(`/api/orders/${orderId}/send-to-kitchen`, { staffId }),
 
-  voidItem: (orderId: string, itemId: string) =>
-    api.patch(`/api/orders/${orderId}/items/${itemId}/void`),
+  updateItemQuantity: (
+    orderId: string,
+    itemId: string,
+    quantity: number,
+    staffId?: string,
+  ) =>
+    api.patch(`/api/orders/${orderId}/items/${itemId}/quantity`, {
+      quantity,
+      staffId,
+    }),
+
+  voidItem: (orderId: string, itemId: string, staffId?: string, reason?: string) =>
+    api.patch(`/api/orders/${orderId}/items/${itemId}/void`, { staffId, reason }),
 
   recordPayment: (
     orderId: string,

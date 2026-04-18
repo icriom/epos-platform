@@ -89,7 +89,6 @@ export default function OrderScreen({ route, navigation }: any) {
 
   const initialise = async () => {
     try {
-      // Load menu — needed either way
       const menuResponse = await menuApi.getMenu(venueId!);
       const menus = menuResponse.data.data;
       if (menus.length > 0) {
@@ -98,7 +97,6 @@ export default function OrderScreen({ route, navigation }: any) {
         if (cats.length > 0) setActiveCategory(cats[0].id);
       }
 
-      // Resolve session id
       let resolvedSessionId = paramSessionId;
       if (!resolvedSessionId) {
         try {
@@ -110,12 +108,6 @@ export default function OrderScreen({ route, navigation }: any) {
         }
       }
 
-      // Order resolution:
-      //   - existingOrderId passed → load it (reopening a stored table)
-      //   - table passed → create the table order straight away
-      //   - walk-in with no existingOrderId → DON'T create yet. The order
-      //     will be created lazily when the user adds their first item.
-      //     This prevents empty walk-in orders cluttering the database.
       if (existingOrderId) {
         const orderResponse = await orderApi.getOrder(existingOrderId);
         const existingOrder = orderResponse.data.data;
@@ -142,8 +134,6 @@ export default function OrderScreen({ route, navigation }: any) {
     }
   };
 
-  // Lazily creates the walk-in order on first item add so empty orders
-  // don't pile up in the database. Returns the new orderId.
   const ensureWalkInOrder = async (): Promise<string | null> => {
     if (orderId) return orderId;
     if (!sessionId) {
@@ -168,7 +158,6 @@ export default function OrderScreen({ route, navigation }: any) {
   };
 
   const handleAddItem = async (item: MenuItem) => {
-    // For walk-ins, lazily create the order on the first item add
     let activeOrderId = orderId;
     if (!activeOrderId) {
       activeOrderId = await ensureWalkInOrder();
@@ -178,7 +167,10 @@ export default function OrderScreen({ route, navigation }: any) {
     setAddingItem(item.id);
     try {
       const existing = order?.items?.find(
-        (i) => i.menuItemId === item.id && i.status !== "VOID" && i.status !== "PAID",
+        (i) =>
+          i.menuItemId === item.id &&
+          i.status !== "VOID" &&
+          i.status !== "PAID",
       );
 
       if (existing) {
@@ -288,8 +280,19 @@ export default function OrderScreen({ route, navigation }: any) {
     );
   };
 
-  const handleStoreTable = () => {
-    navigation.navigate("TablePlan", { sessionId });
+  // After storing a table, go back to the main till (walk-in ready state)
+  // rather than the table plan. If the next order is also a table, staff
+  // just tap the Tables button again — one extra tap, much more flexible.
+  const handleStoreTable = async () => {
+    // Fire any pending items to the kitchen before parking the table
+    if (orderId && staff) {
+      try {
+        await orderApi.sendToKitchen(orderId, staff.id);
+      } catch {
+        // Non-fatal — the items are still saved on the order, just not marked sent
+      }
+    }
+    navigation.replace("Order");
   };
 
   const handleTransferTable = () => {
@@ -345,8 +348,8 @@ export default function OrderScreen({ route, navigation }: any) {
           {existingOrderId
             ? "Reopening table..."
             : table
-            ? "Opening table..."
-            : "Opening till..."}
+              ? "Opening table..."
+              : "Opening till..."}
         </Text>
       </View>
     );
