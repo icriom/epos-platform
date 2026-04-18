@@ -45,18 +45,22 @@ interface OrderItem {
   course: string;
   notes: string;
   status: string;
+  sentAt: string | null;
 }
 
 interface Order {
   id: string;
   orderNumber: number;
+  customerNumber: number | null;
   tableId: string | null;
+  orderType: string;
   covers: number;
   status: string;
   subtotal: string;
   vatTotal: string;
   total: string;
   amountPaid: string;
+  firstSentAt: string | null;
   items: OrderItem[];
 }
 
@@ -157,6 +161,13 @@ export default function OrderScreen({ route, navigation }: any) {
     }
   };
 
+  // Reload order from server — used after any backend-side change so the UI
+  // always reflects the real state (customer number, sent items, etc.)
+  const refreshOrder = async (activeOrderId: string) => {
+    const response = await orderApi.getOrder(activeOrderId);
+    setOrder(response.data.data);
+  };
+
   const handleAddItem = async (item: MenuItem) => {
     let activeOrderId = orderId;
     if (!activeOrderId) {
@@ -170,7 +181,8 @@ export default function OrderScreen({ route, navigation }: any) {
         (i) =>
           i.menuItemId === item.id &&
           i.status !== "VOID" &&
-          i.status !== "PAID",
+          i.status !== "PAID" &&
+          i.status !== "SENT",
       );
 
       if (existing) {
@@ -178,6 +190,7 @@ export default function OrderScreen({ route, navigation }: any) {
           activeOrderId,
           existing.id,
           existing.quantity + 1,
+          staff?.id,
         );
         setOrder(response.data.data);
       } else {
@@ -190,8 +203,7 @@ export default function OrderScreen({ route, navigation }: any) {
           vatRate: parseFloat(item.vatRate),
           course: item.course,
         });
-        const orderResponse = await orderApi.getOrder(activeOrderId);
-        setOrder(orderResponse.data.data);
+        await refreshOrder(activeOrderId);
       }
     } catch (error) {
       Alert.alert("Error", "Could not add item");
@@ -206,25 +218,73 @@ export default function OrderScreen({ route, navigation }: any) {
     setItemModalVisible(true);
   };
 
-  const handleAddOne = async () => {
+  // Wrap an edit action with a "this item was sent to kitchen" warning.
+  // If the item hasn't been sent yet, runs the action straight away.
+  const confirmIfSent = (action: () => void) => {
+    if (selectedItem?.status === "SENT") {
+      Alert.alert(
+        "Item Already Sent",
+        "This item has been sent to the kitchen. Changes will be logged. Continue?",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Continue", style: "destructive", onPress: action },
+        ],
+      );
+    } else {
+      action();
+    }
+  };
+
+  const doAddOne = async () => {
     if (!selectedItem || !orderId) return;
     setActionLoading(true);
     try {
-      const response = await orderApi.updateItemQuantity(
-        orderId,
-        selectedItem.id,
-        selectedItem.quantity + 1,
-      );
-      setOrder(response.data.data);
+      // If the selected item has been sent to the kitchen already, we need
+      // to create a NEW line rather than bumping the quantity. Bumping would
+      // make the kitchen display out of sync — it already fired 1x, and the
+      // second one needs to be fired as a new ticket.
+      if (selectedItem.status === "SENT") {
+        // We need the menu item's vat details to create a new line.
+        // These live on the menu, and we only have the order item info here,
+        // so we find the matching menu item from our loaded categories.
+        const menuItem = categories
+          .flatMap((c) => c.items)
+          .find((i) => i.id === selectedItem.menuItemId);
+
+        if (!menuItem) {
+          Alert.alert("Error", "Could not find menu item to re-add");
+          return;
+        }
+
+        await orderApi.addItem(orderId, {
+          menuItemId: menuItem.id,
+          menuItemName: menuItem.name,
+          quantity: 1,
+          unitPrice: parseFloat(menuItem.basePrice),
+          vatType: menuItem.vatType,
+          vatRate: parseFloat(menuItem.vatRate),
+          course: menuItem.course,
+        });
+        await refreshOrder(orderId);
+      } else {
+        // Normal case — bump the quantity on the existing pending line
+        const response = await orderApi.updateItemQuantity(
+          orderId,
+          selectedItem.id,
+          selectedItem.quantity + 1,
+          staff?.id,
+        );
+        setOrder(response.data.data);
+      }
       setItemModalVisible(false);
-    } catch (error) {
+    } catch {
       Alert.alert("Error", "Could not update item");
     } finally {
       setActionLoading(false);
     }
   };
 
-  const handleRemoveOne = async () => {
+  const doRemoveOne = async () => {
     if (!selectedItem || !orderId) return;
     setActionLoading(true);
     try {
@@ -232,29 +292,38 @@ export default function OrderScreen({ route, navigation }: any) {
         orderId,
         selectedItem.id,
         selectedItem.quantity - 1,
+        staff?.id,
       );
       setOrder(response.data.data);
       setItemModalVisible(false);
-    } catch (error) {
+    } catch {
       Alert.alert("Error", "Could not update item");
     } finally {
       setActionLoading(false);
     }
   };
 
-  const handleVoidItem = async () => {
+  const doVoidItem = async () => {
     if (!selectedItem || !orderId) return;
     setActionLoading(true);
     try {
-      const response = await orderApi.voidItem(orderId, selectedItem.id);
+      const response = await orderApi.voidItem(
+        orderId,
+        selectedItem.id,
+        staff?.id,
+      );
       setOrder(response.data.data);
       setItemModalVisible(false);
-    } catch (error) {
+    } catch {
       Alert.alert("Error", "Could not void item");
     } finally {
       setActionLoading(false);
     }
   };
+
+  const handleAddOne = () => confirmIfSent(doAddOne);
+  const handleRemoveOne = () => confirmIfSent(doRemoveOne);
+  const handleVoidItem = () => confirmIfSent(doVoidItem);
 
   const handleCancelSale = () => {
     Alert.alert(
@@ -271,7 +340,7 @@ export default function OrderScreen({ route, navigation }: any) {
                 await orderApi.updateStatus(orderId, "VOID");
               }
               navigation.replace("Order");
-            } catch (error) {
+            } catch {
               Alert.alert("Error", "Could not cancel sale");
             }
           },
@@ -280,16 +349,13 @@ export default function OrderScreen({ route, navigation }: any) {
     );
   };
 
-  // After storing a table, go back to the main till (walk-in ready state)
-  // rather than the table plan. If the next order is also a table, staff
-  // just tap the Tables button again — one extra tap, much more flexible.
   const handleStoreTable = async () => {
     // Fire any pending items to the kitchen before parking the table
     if (orderId && staff) {
       try {
         await orderApi.sendToKitchen(orderId, staff.id);
       } catch {
-        // Non-fatal — the items are still saved on the order, just not marked sent
+        // Non-fatal — items are still saved, just not marked sent
       }
     }
     navigation.replace("Order");
@@ -312,18 +378,6 @@ export default function OrderScreen({ route, navigation }: any) {
     navigation.navigate("Payment", { order, table });
   };
 
-  const handleSendToKitchen = async () => {
-    if (!order || !order.items || order.items.length === 0) {
-      Alert.alert("No Items", "Add items to the order first");
-      return;
-    }
-    await orderApi.updateStatus(orderId!, "SENT");
-    Alert.alert("Sent to Kitchen", `Order #${order.orderNumber} sent`);
-    if (!table) {
-      navigation.replace("Order");
-    }
-  };
-
   const handleOpenTables = () => {
     navigation.navigate("TablePlan", { sessionId });
   };
@@ -339,6 +393,10 @@ export default function OrderScreen({ route, navigation }: any) {
   const amountPaid = parseFloat(order?.amountPaid ?? "0");
   const remainingBalance = Math.max(0, totalAmount - amountPaid);
   const hasPartialPayment = amountPaid > 0;
+
+  // Customer number only shows for walk-in food orders (assigned by backend
+  // when a kitchen item is added). Shows prominently so staff can call it out.
+  const customerNumber = order?.customerNumber ?? null;
 
   if (loading) {
     return (
@@ -368,12 +426,15 @@ export default function OrderScreen({ route, navigation }: any) {
           <Text style={styles.tableTitle}>{orderTitle}</Text>
           <Text style={styles.tableCovers}>{orderSubtitle}</Text>
         </View>
-        <TouchableOpacity
-          style={styles.sendButton}
-          onPress={handleSendToKitchen}
-        >
-          <Text style={styles.sendButtonText}>Send to Kitchen</Text>
-        </TouchableOpacity>
+        {/* Customer number badge for walk-in food orders */}
+        {customerNumber !== null ? (
+          <View style={styles.customerNumberBadge}>
+            <Text style={styles.customerNumberLabel}>CUSTOMER</Text>
+            <Text style={styles.customerNumberValue}>#{customerNumber}</Text>
+          </View>
+        ) : (
+          <View style={{ minWidth: 140 }} />
+        )}
       </View>
 
       <View style={styles.body}>
@@ -465,40 +526,46 @@ export default function OrderScreen({ route, navigation }: any) {
             {(order?.items ?? []).length === 0 && (
               <Text style={styles.emptyOrder}>No items yet</Text>
             )}
-            {(order?.items ?? []).map((item) => (
-              <TouchableOpacity
-                key={item.id}
-                style={[
-                  styles.orderItem,
-                  item.status === "PAID" && styles.orderItemPaid,
-                ]}
-                onPress={() => handleItemPress(item)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.orderItemLeft}>
-                  <Text style={styles.orderItemQty}>{item.quantity}x</Text>
-                  <View>
-                    <Text style={styles.orderItemName}>
-                      {item.menuItemName}
-                    </Text>
-                    {item.status === "PAID" && (
-                      <Text style={styles.orderItemPaidLabel}>Paid</Text>
-                    )}
-                    {item.notes ? (
-                      <Text style={styles.orderItemNotes}>{item.notes}</Text>
-                    ) : null}
-                  </View>
-                </View>
-                <Text
-                  style={[
-                    styles.orderItemPrice,
-                    item.status === "PAID" && styles.orderItemPricePaid,
-                  ]}
+            {(order?.items ?? []).map((item) => {
+              const isPaid = item.status === "PAID";
+              const isSent = item.status === "SENT";
+              return (
+                <TouchableOpacity
+                  key={item.id}
+                  style={[styles.orderItem, isPaid && styles.orderItemPaid]}
+                  onPress={() => handleItemPress(item)}
+                  activeOpacity={0.7}
                 >
-                  £{parseFloat(item.lineTotal).toFixed(2)}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  <View style={styles.orderItemLeft}>
+                    <Text style={styles.orderItemQty}>{item.quantity}x</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.orderItemName}>
+                        {item.menuItemName}
+                      </Text>
+                      {isPaid && (
+                        <Text style={styles.orderItemPaidLabel}>Paid</Text>
+                      )}
+                      {isSent && (
+                        <Text style={styles.orderItemSentLabel}>
+                          ✓ Sent to kitchen
+                        </Text>
+                      )}
+                      {item.notes ? (
+                        <Text style={styles.orderItemNotes}>{item.notes}</Text>
+                      ) : null}
+                    </View>
+                  </View>
+                  <Text
+                    style={[
+                      styles.orderItemPrice,
+                      isPaid && styles.orderItemPricePaid,
+                    ]}
+                  >
+                    £{parseFloat(item.lineTotal).toFixed(2)}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
 
           <View style={styles.totals}>
@@ -610,6 +677,13 @@ export default function OrderScreen({ route, navigation }: any) {
               {selectedItem?.quantity}x · £
               {parseFloat(selectedItem?.lineTotal ?? "0").toFixed(2)}
             </Text>
+            {selectedItem?.status === "SENT" && (
+              <View style={styles.modalSentWarning}>
+                <Text style={styles.modalSentWarningText}>
+                  ⚠ This item has been sent to the kitchen
+                </Text>
+              </View>
+            )}
             {actionLoading ? (
               <ActivityIndicator
                 color={theme.colors.primary}
@@ -698,18 +772,27 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.sm,
     color: theme.colors.textSecondary,
   },
-  sendButton: {
-    backgroundColor: theme.colors.success,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
+  customerNumberBadge: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
     borderRadius: theme.borderRadius.md,
+    backgroundColor: theme.colors.primary,
     minWidth: 140,
     alignItems: "center",
+    justifyContent: "center",
   },
-  sendButtonText: {
+  customerNumberLabel: {
     color: theme.colors.white,
+    fontSize: theme.fontSize.xs,
     fontWeight: theme.fontWeight.bold,
-    fontSize: theme.fontSize.md,
+    letterSpacing: 1,
+    opacity: 0.85,
+  },
+  customerNumberValue: {
+    color: theme.colors.white,
+    fontSize: theme.fontSize.xxl,
+    fontWeight: theme.fontWeight.bold,
+    lineHeight: 32,
   },
   body: { flex: 1, flexDirection: "row" },
   menuPanel: {
@@ -826,6 +909,12 @@ const styles = StyleSheet.create({
   orderItemPaidLabel: {
     fontSize: theme.fontSize.xs,
     color: theme.colors.success,
+    fontWeight: theme.fontWeight.bold,
+    marginTop: 2,
+  },
+  orderItemSentLabel: {
+    fontSize: theme.fontSize.xs,
+    color: theme.colors.warning,
     fontWeight: theme.fontWeight.bold,
     marginTop: 2,
   },
@@ -949,7 +1038,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surface,
     borderRadius: theme.borderRadius.lg,
     padding: 24,
-    width: 320,
+    width: 340,
     alignItems: "center",
   },
   modalTitle: {
@@ -962,7 +1051,23 @@ const styles = StyleSheet.create({
   modalSubtitle: {
     fontSize: theme.fontSize.md,
     color: theme.colors.textSecondary,
-    marginBottom: 24,
+    marginBottom: 12,
+  },
+  modalSentWarning: {
+    backgroundColor: `${theme.colors.warning}25`,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.warning,
+    padding: 10,
+    marginBottom: 16,
+    width: "100%",
+    alignItems: "center",
+  },
+  modalSentWarningText: {
+    color: theme.colors.warning,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.bold,
+    textAlign: "center",
   },
   modalActions: { width: "100%", gap: 10 },
   modalButton: {
