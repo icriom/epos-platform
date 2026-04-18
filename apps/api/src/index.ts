@@ -8,6 +8,7 @@ import authRoutes from "./routes/auth/index";
 import sessionRoutes from "./routes/sessions/index";
 import orderRoutes from "./routes/orders/index";
 import tableRoutes from "./routes/tables/index";
+import reportsRoutes from "./routes/reports/index";
 
 dotenv.config();
 
@@ -48,6 +49,7 @@ server.register(authRoutes, { prefix: "/api/auth" });
 server.register(sessionRoutes, { prefix: "/api/sessions" });
 server.register(orderRoutes, { prefix: "/api/orders" });
 server.register(tableRoutes, { prefix: "/api/tables" });
+server.register(reportsRoutes, { prefix: "/api/reports" });
 
 server.get("/health", async () => {
   return {
@@ -87,7 +89,8 @@ const start = async () => {
     console.log(`👤 Auth:         http://localhost:${port}/api/auth`);
     console.log(`📅 Sessions:     http://localhost:${port}/api/sessions`);
     console.log(`📋 Orders:       http://localhost:${port}/api/orders`);
-    console.log(`🪑 Tables:       http://localhost:${port}/api/tables\n`);
+    console.log(`🪑 Tables:       http://localhost:${port}/api/tables`);
+    console.log(`📊 Reports:      http://localhost:${port}/api/reports\n`);
   } catch (err) {
     server.log.error(err);
     process.exit(1);
