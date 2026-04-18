@@ -196,8 +196,6 @@ export default async function orderRoutes(fastify: FastifyInstance) {
   );
 
   // ─── Get open order for a table ─────────────────────────────────────────────
-  // Returns the current OPEN order for a given tableId, or null if none exists.
-  // Used by TablePlanScreen to colour tables and by OrderScreen to reopen them.
   fastify.get<{ Params: { tableId: string } }>(
     "/table/:tableId/open",
     async (request, reply) => {
@@ -219,8 +217,6 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           orderBy: { openedAt: "desc" },
         });
 
-        // Return null data (not 404) so the client can distinguish
-        // "no open order" from a real error
         return { success: true, data: order ?? null };
       } catch (error) {
         reply.status(500);
@@ -229,9 +225,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     },
   );
 
-  // ─── Get open orders for all tables in a venue (for floor plan colouring) ──
-  // Returns an array of { tableId, orderId, amountPaid, total } for all
-  // currently OPEN orders that have a tableId set.
+  // ─── Get open orders for all tables in a venue ──────────────────────────────
   fastify.get<{ Params: { venueId: string } }>(
     "/venue/:venueId/open-tables",
     async (request, reply) => {
@@ -444,18 +438,27 @@ export default async function orderRoutes(fastify: FastifyInstance) {
   // Takes a payment against an open order without closing it.
   // The order stays OPEN with amountPaid updated.
   // When amountPaid >= total the order is automatically closed.
+  //
+  // Two ways to mark items as paid:
+  //   itemIds      — whole order-item lines paid for in full
+  //   unitSplits   — partial quantity payments; the line is split so
+  //                  the paid portion shows as a separate PAID line.
+  //                  Example: pay for 1 of 4 Guinness → original line
+  //                  becomes 3x Guinness (OPEN), new line 1x Guinness (PAID).
   fastify.post<{
     Params: { id: string };
     Body: {
       amount: number;
       method: string;
       amountTendered?: number;
-      itemIds?: string[]; // optional — which items this payment covers
+      itemIds?: string[];
+      unitSplits?: Array<{ itemId: string; paidQuantity: number }>;
     };
   }>("/:id/partial-payment", async (request, reply) => {
     try {
       const { id } = request.params;
-      const { amount, method, amountTendered, itemIds } = request.body;
+      const { amount, method, amountTendered, itemIds, unitSplits } =
+        request.body;
 
       const order = await prisma.order.findUnique({
         where: { id },
@@ -489,7 +492,7 @@ export default async function orderRoutes(fastify: FastifyInstance) {
         },
       });
 
-      // Mark specific items as PAID if itemIds provided
+      // Mark items paid in full
       if (itemIds && itemIds.length > 0) {
         await prisma.orderItem.updateMany({
           where: { id: { in: itemIds }, orderId: id },
@@ -497,14 +500,69 @@ export default async function orderRoutes(fastify: FastifyInstance) {
         });
       }
 
+      // Handle partial-quantity splits
+      if (unitSplits && unitSplits.length > 0) {
+        for (const split of unitSplits) {
+          const original = await prisma.orderItem.findUnique({
+            where: { id: split.itemId },
+          });
+          if (!original) continue;
+          if (split.paidQuantity <= 0) continue;
+
+          if (split.paidQuantity >= original.quantity) {
+            // Whole line paid — just mark as PAID
+            await prisma.orderItem.update({
+              where: { id: split.itemId },
+              data: { status: "PAID" },
+            });
+            continue;
+          }
+
+          const unitPrice = Number(original.unitPrice);
+          const vatRate = Number(original.vatRate);
+          const remainingQty = original.quantity - split.paidQuantity;
+          const paidLineTotal = unitPrice * split.paidQuantity;
+          const paidVatAmount = (paidLineTotal * vatRate) / 100;
+          const remainingLineTotal = unitPrice * remainingQty;
+          const remainingVatAmount = (remainingLineTotal * vatRate) / 100;
+
+          await prisma.$transaction(async (tx) => {
+            // Reduce original line to remaining quantity
+            await tx.orderItem.update({
+              where: { id: split.itemId },
+              data: {
+                quantity: remainingQty,
+                lineTotal: remainingLineTotal,
+                vatAmount: remainingVatAmount,
+              },
+            });
+            // Create new PAID line for the paid portion
+            await tx.orderItem.create({
+              data: {
+                orderId: id,
+                menuItemId: original.menuItemId,
+                menuItemName: original.menuItemName,
+                course: original.course,
+                quantity: split.paidQuantity,
+                unitPrice: original.unitPrice,
+                vatType: original.vatType,
+                vatRate: original.vatRate,
+                vatAmount: paidVatAmount,
+                lineTotal: paidLineTotal,
+                notes: original.notes,
+                status: "PAID",
+              },
+            });
+          });
+        }
+      }
+
       // Update the order — close it if fully paid, otherwise keep OPEN
       const updatedOrder = await prisma.order.update({
         where: { id },
         data: {
           amountPaid: newAmountPaid,
-          ...(isFullyPaid
-            ? { status: "PAID", paidAt: new Date() }
-            : {}),
+          ...(isFullyPaid ? { status: "PAID", paidAt: new Date() } : {}),
         },
         include: {
           items: {

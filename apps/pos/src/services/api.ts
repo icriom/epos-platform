@@ -82,12 +82,9 @@ export const orderApi = {
   getSessionOrders: (sessionId: string) =>
     api.get(`/api/orders/session/${sessionId}`),
 
-  // Returns the open order for a table, or null if the table is empty.
-  // Used when tapping a table on the floor plan.
   getOpenOrderForTable: (tableId: string) =>
     api.get(`/api/orders/table/${tableId}/open`),
 
-  // Returns all open orders that have a tableId set, for floor plan colouring.
   getOpenTableOrders: (venueId: string) =>
     api.get(`/api/orders/venue/${venueId}/open-tables`),
 
@@ -113,20 +110,27 @@ export const orderApi = {
       amountTendered,
     }),
 
-  // Partial payment — order stays OPEN, amountPaid is updated.
-  // itemIds is optional: pass item IDs to mark specific items as paid.
+  // Partial payment — order stays OPEN.
+  // itemIds       — item lines paid for in full
+  // unitSplits    — partial-quantity payments; each split causes
+  //                 the original line to be divided into a remaining OPEN
+  //                 line plus a new PAID line for the paid portion.
   recordPartialPayment: (
     orderId: string,
     amount: number,
     method: string,
-    itemIds?: string[],
-    amountTendered?: number,
+    options?: {
+      itemIds?: string[];
+      unitSplits?: Array<{ itemId: string; paidQuantity: number }>;
+      amountTendered?: number;
+    },
   ) =>
     api.post(`/api/orders/${orderId}/partial-payment`, {
       amount,
       method,
-      itemIds,
-      amountTendered,
+      itemIds: options?.itemIds,
+      unitSplits: options?.unitSplits,
+      amountTendered: options?.amountTendered,
     }),
 };
 

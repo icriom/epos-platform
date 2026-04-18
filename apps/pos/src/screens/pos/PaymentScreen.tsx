@@ -16,6 +16,7 @@ interface OrderItem {
   id: string;
   menuItemName: string;
   quantity: number;
+  unitPrice: string;
   lineTotal: string;
   status: string;
 }
@@ -30,29 +31,50 @@ interface Order {
   items: OrderItem[];
 }
 
+// A single unit of an item expanded from a multi-quantity order item.
+interface SelectableUnit {
+  unitKey: string; // unique id for this specific unit — e.g. "itemId-0"
+  orderItemId: string; // the original order item ID
+  menuItemName: string;
+  unitPrice: number; // the per-unit price
+  unitIndex: number; // 0, 1, 2... within the quantity
+  totalQuantity: number; // total quantity on the order line
+}
+
 type Screen =
-  | "METHOD_SELECT"       // Choose Full / Partial
-  | "PARTIAL_MODE"        // Choose By Item or Custom Amount
-  | "PARTIAL_ITEMS"       // Select specific items to pay for
-  | "PARTIAL_CUSTOM"      // Enter a custom amount
-  | "CASH"                // Cash numpad (full payment)
-  | "PARTIAL_CASH"        // Cash numpad (partial payment)
-  | "SPLIT_SETUP"         // Choose number of ways
-  | "SPLIT_COLLECT"       // Collect each portion
-  | "SPLIT_PORTION_CASH"  // Cash numpad for a split portion
-  | "SUCCESS"             // Full payment complete
-  | "PARTIAL_SUCCESS";    // Partial payment stored, returning to table
+  | "METHOD_SELECT"
+  | "PARTIAL_MODE"
+  | "PARTIAL_ITEMS"
+  | "PARTIAL_CUSTOM"
+  | "CASH"
+  | "PARTIAL_CASH"
+  | "SPLIT_SETUP"
+  | "SPLIT_COLLECT"
+  | "SPLIT_PORTION_CASH"
+  | "SUCCESS"
+  | "PARTIAL_SUCCESS";
 
 export default function PaymentScreen({ route, navigation }: any) {
   const { order, table } = route.params as { order: Order; table?: any };
 
   const totalAmount = parseFloat(order.total);
   const alreadyPaid = parseFloat(order.amountPaid ?? "0");
-  // The amount still outstanding at the point we enter the payment screen
   const remainingBalance = Math.max(0, totalAmount - alreadyPaid);
 
-  // Items that haven't been paid yet
   const unpaidItems = order.items.filter((i) => i.status !== "PAID");
+
+  // Expand multi-quantity items into individual selectable units
+  const selectableUnits: SelectableUnit[] = unpaidItems.flatMap((item) => {
+    const perUnitPrice = parseFloat(item.lineTotal) / item.quantity;
+    return Array.from({ length: item.quantity }, (_, i) => ({
+      unitKey: `${item.id}-${i}`,
+      orderItemId: item.id,
+      menuItemName: item.menuItemName,
+      unitPrice: perUnitPrice,
+      unitIndex: i,
+      totalQuantity: item.quantity,
+    }));
+  });
 
   const [screen, setScreen] = useState<Screen>("METHOD_SELECT");
   const [tendered, setTendered] = useState("");
@@ -63,12 +85,10 @@ export default function PaymentScreen({ route, navigation }: any) {
   const [paidMethod, setPaidMethod] = useState("");
   const [changeAmount, setChangeAmount] = useState(0);
 
-  // Partial — by item
-  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(
+  const [selectedUnitKeys, setSelectedUnitKeys] = useState<Set<string>>(
     new Set(),
   );
 
-  // Partial — custom amount
   const [customAmount, setCustomAmount] = useState("");
 
   const tenderedAmount = parseFloat(tendered) || 0;
@@ -77,14 +97,44 @@ export default function PaymentScreen({ route, navigation }: any) {
   const currentPortion = splitPortionsPaid + 1;
   const portionChange = tenderedAmount - portionAmount;
 
-  // The amount being paid in partial mode
-  const selectedItemsTotal = unpaidItems
-    .filter((i) => selectedItemIds.has(i.id))
-    .reduce((sum, i) => sum + parseFloat(i.lineTotal), 0);
+  const selectedUnitsTotal = selectableUnits
+    .filter((u) => selectedUnitKeys.has(u.unitKey))
+    .reduce((sum, u) => sum + u.unitPrice, 0);
+
+  // Build the payload for the API based on which units are selected.
+  // Groups units by orderItemId, then decides per line whether to:
+  //   - mark it fully PAID (itemIds)
+  //   - split it into paid + remaining (unitSplits)
+  const buildPaymentPayload = () => {
+    const countsByItem = new Map<string, number>();
+    selectableUnits.forEach((u) => {
+      if (selectedUnitKeys.has(u.unitKey)) {
+        countsByItem.set(
+          u.orderItemId,
+          (countsByItem.get(u.orderItemId) ?? 0) + 1,
+        );
+      }
+    });
+
+    const itemIds: string[] = [];
+    const unitSplits: Array<{ itemId: string; paidQuantity: number }> = [];
+
+    countsByItem.forEach((paidCount, itemId) => {
+      const totalForItem = selectableUnits.filter(
+        (u) => u.orderItemId === itemId,
+      ).length;
+      if (paidCount >= totalForItem) {
+        itemIds.push(itemId);
+      } else {
+        unitSplits.push({ itemId, paidQuantity: paidCount });
+      }
+    });
+
+    return { itemIds, unitSplits };
+  };
 
   const customAmountValue = parseFloat(customAmount) || 0;
 
-  // Quick amounts for full cash
   const quickAmounts = [
     Math.ceil(remainingBalance),
     Math.ceil(remainingBalance / 5) * 5,
@@ -94,7 +144,6 @@ export default function PaymentScreen({ route, navigation }: any) {
     .filter((v, i, a) => a.indexOf(v) === i && v >= remainingBalance)
     .slice(0, 4);
 
-  // Quick amounts for split portion
   const portionQuickAmounts = [
     Math.ceil(portionAmount),
     Math.ceil(portionAmount / 5) * 5,
@@ -104,24 +153,26 @@ export default function PaymentScreen({ route, navigation }: any) {
     .filter((v, i, a) => a.indexOf(v) === i && v >= portionAmount)
     .slice(0, 4);
 
-  // Auto-confirm full cash
   useEffect(() => {
     if (screen !== "CASH") return;
-    if (tenderedAmount >= remainingBalance && remainingBalance > 0 && !processing) {
+    if (
+      tenderedAmount >= remainingBalance &&
+      remainingBalance > 0 &&
+      !processing
+    ) {
       handleConfirmFullPayment("CASH", remainingBalance, tenderedAmount);
     }
   }, [tenderedAmount, screen]);
 
-  // Auto-confirm partial cash
   useEffect(() => {
     if (screen !== "PARTIAL_CASH") return;
-    const target = customAmountValue > 0 ? customAmountValue : selectedItemsTotal;
+    const target =
+      customAmountValue > 0 ? customAmountValue : selectedUnitsTotal;
     if (tenderedAmount >= target && target > 0 && !processing) {
       handleConfirmPartialPayment("CASH", target, tenderedAmount);
     }
   }, [tenderedAmount, screen]);
 
-  // Auto-confirm split portion cash
   useEffect(() => {
     if (screen !== "SPLIT_PORTION_CASH") return;
     if (tenderedAmount >= portionAmount && portionAmount > 0 && !processing) {
@@ -129,7 +180,6 @@ export default function PaymentScreen({ route, navigation }: any) {
     }
   }, [tenderedAmount, screen]);
 
-  // Countdown after full payment
   useEffect(() => {
     if (screen !== "SUCCESS") return;
     if (countdown <= 0) {
@@ -164,19 +214,18 @@ export default function PaymentScreen({ route, navigation }: any) {
     }
   };
 
-  const toggleItemSelection = (itemId: string) => {
-    setSelectedItemIds((prev) => {
+  const toggleUnitSelection = (unitKey: string) => {
+    setSelectedUnitKeys((prev) => {
       const next = new Set(prev);
-      if (next.has(itemId)) {
-        next.delete(itemId);
+      if (next.has(unitKey)) {
+        next.delete(unitKey);
       } else {
-        next.add(itemId);
+        next.add(unitKey);
       }
       return next;
     });
   };
 
-  // ── Full payment ────────────────────────────────────────────────────────────
   const handleConfirmFullPayment = async (
     method: string,
     amount: number,
@@ -196,7 +245,6 @@ export default function PaymentScreen({ route, navigation }: any) {
     }
   };
 
-  // ── Partial payment ─────────────────────────────────────────────────────────
   const handleConfirmPartialPayment = async (
     method: string,
     amount: number,
@@ -205,23 +253,28 @@ export default function PaymentScreen({ route, navigation }: any) {
     if (processing) return;
     setProcessing(true);
     try {
-      const itemIds =
-        selectedItemIds.size > 0 ? Array.from(selectedItemIds) : undefined;
+      // Build payload from selected units — handles both full-item and split cases
+      const { itemIds, unitSplits } =
+        selectedUnitKeys.size > 0
+          ? buildPaymentPayload()
+          : { itemIds: [], unitSplits: [] };
+
       const response = await orderApi.recordPartialPayment(
         order.id,
         amount,
         method,
-        itemIds,
-        amountTendered,
+        {
+          itemIds: itemIds.length > 0 ? itemIds : undefined,
+          unitSplits: unitSplits.length > 0 ? unitSplits : undefined,
+          amountTendered,
+        },
       );
 
       if (response.data.isFullyPaid) {
-        // Partial payment happened to cover the remaining balance exactly
         setPaidMethod(method);
         setChangeAmount(amountTendered ? amountTendered - amount : 0);
         setScreen("SUCCESS");
       } else {
-        // Store the table — go back to floor plan
         setScreen("PARTIAL_SUCCESS");
       }
     } catch (error) {
@@ -262,8 +315,9 @@ export default function PaymentScreen({ route, navigation }: any) {
     }
   };
 
-  // ── Partial success screen — stored, returning to table plan ────────────────
   if (screen === "PARTIAL_SUCCESS") {
+    const paidAmount =
+      customAmountValue > 0 ? customAmountValue : selectedUnitsTotal;
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.successScreen}>
@@ -271,9 +325,11 @@ export default function PaymentScreen({ route, navigation }: any) {
           <Text style={styles.successTitle}>Payment Stored</Text>
           <Text style={styles.successMethod}>Table stored with balance</Text>
           <Text style={styles.successAmount}>
-            £{(remainingBalance - (customAmountValue || selectedItemsTotal)).toFixed(2)} remaining
+            £{(remainingBalance - paidAmount).toFixed(2)} remaining
           </Text>
-          <Text style={styles.successCountdown}>Returning to floor plan...</Text>
+          <Text style={styles.successCountdown}>
+            Returning to floor plan...
+          </Text>
           <TouchableOpacity
             style={styles.successButton}
             onPress={() => navigation.navigate("TablePlan")}
@@ -285,7 +341,6 @@ export default function PaymentScreen({ route, navigation }: any) {
     );
   }
 
-  // ── Full success screen ─────────────────────────────────────────────────────
   if (screen === "SUCCESS") {
     return (
       <SafeAreaView style={styles.container}>
@@ -328,7 +383,6 @@ export default function PaymentScreen({ route, navigation }: any) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={() => navigation.goBack()}
@@ -344,7 +398,6 @@ export default function PaymentScreen({ route, navigation }: any) {
       </View>
 
       <View style={styles.body}>
-        {/* Left — Order summary */}
         <View style={styles.summaryPanel}>
           <Text style={styles.panelTitle}>Order Summary</Text>
           <ScrollView style={styles.itemList}>
@@ -385,7 +438,9 @@ export default function PaymentScreen({ route, navigation }: any) {
             {alreadyPaid > 0 && (
               <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Paid</Text>
-                <Text style={[styles.summaryValue, { color: theme.colors.success }]}>
+                <Text
+                  style={[styles.summaryValue, { color: theme.colors.success }]}
+                >
                   −£{alreadyPaid.toFixed(2)}
                 </Text>
               </View>
@@ -401,10 +456,7 @@ export default function PaymentScreen({ route, navigation }: any) {
           </View>
         </View>
 
-        {/* Right — Payment flow */}
         <View style={styles.paymentPanel}>
-
-          {/* ── Method / mode selector ── */}
           {screen === "METHOD_SELECT" && (
             <View style={styles.methodSelect}>
               <Text style={styles.panelTitle}>Select Payment Method</Text>
@@ -437,8 +489,7 @@ export default function PaymentScreen({ route, navigation }: any) {
                 </TouchableOpacity>
               </View>
 
-              {/* Partial payment option — only for table orders with unpaid items */}
-              {table && unpaidItems.length > 0 && (
+              {table && selectableUnits.length > 0 && (
                 <TouchableOpacity
                   style={styles.partialButton}
                   onPress={() => setScreen("PARTIAL_MODE")}
@@ -457,7 +508,6 @@ export default function PaymentScreen({ route, navigation }: any) {
             </View>
           )}
 
-          {/* ── Partial mode — choose by item or custom amount ── */}
           {screen === "PARTIAL_MODE" && (
             <View style={styles.partialModeSelect}>
               <View style={styles.flowHeader}>
@@ -472,7 +522,7 @@ export default function PaymentScreen({ route, navigation }: any) {
               <TouchableOpacity
                 style={styles.partialModeButton}
                 onPress={() => {
-                  setSelectedItemIds(new Set());
+                  setSelectedUnitKeys(new Set());
                   setScreen("PARTIAL_ITEMS");
                 }}
               >
@@ -502,7 +552,6 @@ export default function PaymentScreen({ route, navigation }: any) {
             </View>
           )}
 
-          {/* ── Partial — select items ── */}
           {screen === "PARTIAL_ITEMS" && (
             <View style={styles.partialItems}>
               <View style={styles.flowHeader}>
@@ -512,16 +561,17 @@ export default function PaymentScreen({ route, navigation }: any) {
                 <Text style={styles.panelTitle}>Select Items to Pay</Text>
               </View>
               <ScrollView style={styles.itemSelectList}>
-                {unpaidItems.map((item) => {
-                  const selected = selectedItemIds.has(item.id);
+                {selectableUnits.map((unit) => {
+                  const selected = selectedUnitKeys.has(unit.unitKey);
+                  const showIndex = unit.totalQuantity > 1;
                   return (
                     <TouchableOpacity
-                      key={item.id}
+                      key={unit.unitKey}
                       style={[
                         styles.itemSelectRow,
                         selected && styles.itemSelectRowSelected,
                       ]}
-                      onPress={() => toggleItemSelection(item.id)}
+                      onPress={() => toggleUnitSelection(unit.unitKey)}
                     >
                       <View
                         style={[
@@ -533,25 +583,36 @@ export default function PaymentScreen({ route, navigation }: any) {
                           <Text style={styles.itemSelectCheckMark}>✓</Text>
                         )}
                       </View>
-                      <Text style={styles.itemSelectQty}>{item.quantity}x</Text>
-                      <Text style={styles.itemSelectName}>
-                        {item.menuItemName}
-                      </Text>
+                      <Text style={styles.itemSelectQty}>1x</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.itemSelectName}>
+                          {unit.menuItemName}
+                        </Text>
+                        {showIndex && (
+                          <Text style={styles.itemSelectIndex}>
+                            {unit.unitIndex + 1} of {unit.totalQuantity}
+                          </Text>
+                        )}
+                      </View>
                       <Text style={styles.itemSelectPrice}>
-                        £{parseFloat(item.lineTotal).toFixed(2)}
+                        £{unit.unitPrice.toFixed(2)}
                       </Text>
                     </TouchableOpacity>
                   );
                 })}
               </ScrollView>
-              {selectedItemIds.size > 0 && (
+              {selectedUnitKeys.size > 0 && (
                 <View style={styles.partialItemsFooter}>
                   <Text style={styles.partialItemsTotal}>
-                    To pay: £{selectedItemsTotal.toFixed(2)}
+                    To pay: £{selectedUnitsTotal.toFixed(2)}
                   </Text>
                   <View style={styles.partialItemsButtons}>
                     <TouchableOpacity
-                      style={[styles.methodButton, styles.methodCash, { flex: 1, maxHeight: 80 }]}
+                      style={[
+                        styles.methodButton,
+                        styles.methodCash,
+                        { flex: 1, maxHeight: 80 },
+                      ]}
                       onPress={() => {
                         setTendered("");
                         setScreen("PARTIAL_CASH");
@@ -561,9 +622,13 @@ export default function PaymentScreen({ route, navigation }: any) {
                       <Text style={styles.methodLabel}>Cash</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={[styles.methodButton, styles.methodCard, { flex: 1, maxHeight: 80 }]}
+                      style={[
+                        styles.methodButton,
+                        styles.methodCard,
+                        { flex: 1, maxHeight: 80 },
+                      ]}
                       onPress={() =>
-                        handleConfirmPartialPayment("CARD", selectedItemsTotal)
+                        handleConfirmPartialPayment("CARD", selectedUnitsTotal)
                       }
                     >
                       <Text style={styles.methodIcon}>💳</Text>
@@ -575,7 +640,6 @@ export default function PaymentScreen({ route, navigation }: any) {
             </View>
           )}
 
-          {/* ── Partial — custom amount entry ── */}
           {screen === "PARTIAL_CUSTOM" && (
             <View style={styles.cashFlow}>
               <View style={styles.flowHeader}>
@@ -584,7 +648,9 @@ export default function PaymentScreen({ route, navigation }: any) {
                 </TouchableOpacity>
                 <Text style={styles.panelTitle}>Custom Amount</Text>
               </View>
-              <Text style={styles.totalDue}>£{remainingBalance.toFixed(2)}</Text>
+              <Text style={styles.totalDue}>
+                £{remainingBalance.toFixed(2)}
+              </Text>
               <Text style={styles.totalDueLabel}>Balance remaining</Text>
               <View style={styles.tenderedDisplay}>
                 <Text style={styles.tenderedLabel}>Amount to take</Text>
@@ -593,7 +659,20 @@ export default function PaymentScreen({ route, navigation }: any) {
                 </Text>
               </View>
               <View style={styles.numpad}>
-                {["1","2","3","4","5","6","7","8","9",".","0","⌫"].map((key) => (
+                {[
+                  "1",
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  ".",
+                  "0",
+                  "⌫",
+                ].map((key) => (
                   <TouchableOpacity
                     key={key}
                     style={styles.numpadKey}
@@ -607,7 +686,11 @@ export default function PaymentScreen({ route, navigation }: any) {
                 customAmountValue <= remainingBalance && (
                   <View style={styles.partialItemsButtons}>
                     <TouchableOpacity
-                      style={[styles.methodButton, styles.methodCash, { flex: 1, maxHeight: 80 }]}
+                      style={[
+                        styles.methodButton,
+                        styles.methodCash,
+                        { flex: 1, maxHeight: 80 },
+                      ]}
                       onPress={() => {
                         setTendered("");
                         setScreen("PARTIAL_CASH");
@@ -617,7 +700,11 @@ export default function PaymentScreen({ route, navigation }: any) {
                       <Text style={styles.methodLabel}>Cash</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
-                      style={[styles.methodButton, styles.methodCard, { flex: 1, maxHeight: 80 }]}
+                      style={[
+                        styles.methodButton,
+                        styles.methodCard,
+                        { flex: 1, maxHeight: 80 },
+                      ]}
                       onPress={() =>
                         handleConfirmPartialPayment("CARD", customAmountValue)
                       }
@@ -630,7 +717,6 @@ export default function PaymentScreen({ route, navigation }: any) {
             </View>
           )}
 
-          {/* ── Partial cash numpad ── */}
           {screen === "PARTIAL_CASH" && (
             <View style={styles.cashFlow}>
               <View style={styles.flowHeader}>
@@ -638,7 +724,7 @@ export default function PaymentScreen({ route, navigation }: any) {
                   onPress={() => {
                     setTendered("");
                     setScreen(
-                      selectedItemIds.size > 0
+                      selectedUnitKeys.size > 0
                         ? "PARTIAL_ITEMS"
                         : "PARTIAL_CUSTOM",
                     );
@@ -652,7 +738,7 @@ export default function PaymentScreen({ route, navigation }: any) {
                 const partialTarget =
                   customAmountValue > 0
                     ? customAmountValue
-                    : selectedItemsTotal;
+                    : selectedUnitsTotal;
                 const partialChange = tenderedAmount - partialTarget;
                 return (
                   <>
@@ -670,8 +756,7 @@ export default function PaymentScreen({ route, navigation }: any) {
                         Math.ceil(partialTarget / 20) * 20,
                       ]
                         .filter(
-                          (v, i, a) =>
-                            a.indexOf(v) === i && v >= partialTarget,
+                          (v, i, a) => a.indexOf(v) === i && v >= partialTarget,
                         )
                         .slice(0, 4)
                         .map((a) => (
@@ -718,7 +803,20 @@ export default function PaymentScreen({ route, navigation }: any) {
                 );
               })()}
               <View style={styles.numpad}>
-                {["1","2","3","4","5","6","7","8","9",".","0","⌫"].map((key) => (
+                {[
+                  "1",
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  ".",
+                  "0",
+                  "⌫",
+                ].map((key) => (
                   <TouchableOpacity
                     key={key}
                     style={styles.numpadKey}
@@ -731,7 +829,6 @@ export default function PaymentScreen({ route, navigation }: any) {
             </View>
           )}
 
-          {/* ── Full cash flow ── */}
           {screen === "CASH" && (
             <View style={styles.cashFlow}>
               <View style={styles.flowHeader}>
@@ -787,7 +884,20 @@ export default function PaymentScreen({ route, navigation }: any) {
                 </View>
               )}
               <View style={styles.numpad}>
-                {["1","2","3","4","5","6","7","8","9",".","0","⌫"].map((key) => (
+                {[
+                  "1",
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  ".",
+                  "0",
+                  "⌫",
+                ].map((key) => (
                   <TouchableOpacity
                     key={key}
                     style={styles.numpadKey}
@@ -800,7 +910,6 @@ export default function PaymentScreen({ route, navigation }: any) {
             </View>
           )}
 
-          {/* ── Split setup ── */}
           {screen === "SPLIT_SETUP" && (
             <View style={styles.splitSetup}>
               <View style={styles.flowHeader}>
@@ -844,7 +953,6 @@ export default function PaymentScreen({ route, navigation }: any) {
             </View>
           )}
 
-          {/* ── Split collect ── */}
           {screen === "SPLIT_COLLECT" && (
             <View style={styles.splitCollect}>
               <View style={styles.portionBadge}>
@@ -878,7 +986,6 @@ export default function PaymentScreen({ route, navigation }: any) {
             </View>
           )}
 
-          {/* ── Split portion cash ── */}
           {screen === "SPLIT_PORTION_CASH" && (
             <View style={styles.cashFlow}>
               <View style={styles.flowHeader}>
@@ -936,7 +1043,20 @@ export default function PaymentScreen({ route, navigation }: any) {
                 </View>
               )}
               <View style={styles.numpad}>
-                {["1","2","3","4","5","6","7","8","9",".","0","⌫"].map((key) => (
+                {[
+                  "1",
+                  "2",
+                  "3",
+                  "4",
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  ".",
+                  "0",
+                  "⌫",
+                ].map((key) => (
                   <TouchableOpacity
                     key={key}
                     style={styles.numpadKey}
@@ -1248,9 +1368,13 @@ const styles = StyleSheet.create({
     minWidth: 28,
   },
   itemSelectName: {
-    flex: 1,
     fontSize: theme.fontSize.md,
     color: theme.colors.textPrimary,
+  },
+  itemSelectIndex: {
+    fontSize: theme.fontSize.xs,
+    color: theme.colors.textSecondary,
+    marginTop: 2,
   },
   itemSelectPrice: {
     fontSize: theme.fontSize.md,
@@ -1428,5 +1552,4 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.md,
     fontWeight: theme.fontWeight.bold,
   },
-  modeSelect: { flex: 1 },
 });
