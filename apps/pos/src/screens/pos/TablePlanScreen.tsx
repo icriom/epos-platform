@@ -41,10 +41,6 @@ interface OpenTableOrder {
 }
 
 export default function TablePlanScreen({ route, navigation }: any) {
-  // transferOrderId and transferFromTableNumber are passed when this screen
-  // is opened in transfer mode from OrderScreen. If present, the behaviour
-  // changes: only empty tables are tappable, and tapping one does a transfer
-  // instead of opening the order.
   const {
     sessionId: paramSessionId,
     transferOrderId,
@@ -109,7 +105,6 @@ export default function TablePlanScreen({ route, navigation }: any) {
     }
   };
 
-  // Normal mode — tap opens the order (or creates new)
   const handleNormalTablePress = async (table: Table) => {
     if (!sessionId) {
       Alert.alert(
@@ -136,11 +131,8 @@ export default function TablePlanScreen({ route, navigation }: any) {
     }
   };
 
-  // Transfer mode — tapping an empty table transfers the order to it
   const handleTransferTablePress = async (table: Table) => {
     if (openTableOrders[table.id]) {
-      // Destination occupied — for now, simply inform the user.
-      // Merge logic will come later.
       Alert.alert(
         "Table Occupied",
         `Table ${table.tableNumber} already has an open order. Merge tables is coming in a future update.`,
@@ -159,9 +151,7 @@ export default function TablePlanScreen({ route, navigation }: any) {
             setTransferring(true);
             try {
               await orderApi.transferOrder(transferOrderId, table.id);
-              // Refresh statuses before returning so floor plan reflects change
               await refreshTableStatuses();
-              // Navigate back to OrderScreen with the NEW table info
               navigation.navigate("Order", {
                 table,
                 sessionId,
@@ -233,7 +223,6 @@ export default function TablePlanScreen({ route, navigation }: any) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.venueName}>
@@ -280,7 +269,6 @@ export default function TablePlanScreen({ route, navigation }: any) {
         </View>
       </View>
 
-      {/* Section tabs */}
       {plans.length > 1 && (
         <View style={styles.tabs}>
           {plans.map((plan, index) => (
@@ -302,7 +290,6 @@ export default function TablePlanScreen({ route, navigation }: any) {
         </View>
       )}
 
-      {/* Transfer mode banner */}
       {isTransferMode && (
         <View style={styles.transferBanner}>
           <Text style={styles.transferBannerText}>
@@ -312,14 +299,12 @@ export default function TablePlanScreen({ route, navigation }: any) {
         </View>
       )}
 
-      {/* Floor plan */}
       <ScrollView style={styles.floorPlanContainer}>
         <View style={styles.floorPlan}>
           {currentPlan?.tables.map((table) => {
             const statusColour = getTableStatusColour(table);
             const openOrder = openTableOrders[table.id];
             const isOccupied = !!openOrder;
-            // In transfer mode, dim occupied tables to indicate they can't be used
             const dimmed = isTransferMode && isOccupied;
             return (
               <TouchableOpacity
@@ -366,7 +351,6 @@ export default function TablePlanScreen({ route, navigation }: any) {
         </View>
       )}
 
-      {/* Status bar */}
       <View style={styles.statusBar}>
         <View style={styles.statusLegend}>
           <View

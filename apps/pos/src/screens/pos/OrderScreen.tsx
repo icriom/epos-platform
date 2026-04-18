@@ -426,15 +426,20 @@ export default function OrderScreen({ route, navigation }: any) {
           <Text style={styles.tableTitle}>{orderTitle}</Text>
           <Text style={styles.tableCovers}>{orderSubtitle}</Text>
         </View>
-        {/* Customer number badge for walk-in food orders */}
-        {customerNumber !== null ? (
-          <View style={styles.customerNumberBadge}>
-            <Text style={styles.customerNumberLabel}>CUSTOMER</Text>
-            <Text style={styles.customerNumberValue}>#{customerNumber}</Text>
-          </View>
-        ) : (
-          <View style={{ minWidth: 140 }} />
-        )}
+        <View style={styles.headerRight}>
+          <TouchableOpacity
+            onPress={() => navigation.navigate("Reports")}
+            style={styles.managerButton}
+          >
+            <Text style={styles.managerButtonText}>🧑‍💼 Manager</Text>
+          </TouchableOpacity>
+          {customerNumber !== null && (
+            <View style={styles.customerNumberBadge}>
+              <Text style={styles.customerNumberLabel}>CUSTOMER</Text>
+              <Text style={styles.customerNumberValue}>#{customerNumber}</Text>
+            </View>
+          )}
+        </View>
       </View>
 
       <View style={styles.body}>
@@ -771,6 +776,24 @@ const styles = StyleSheet.create({
   tableCovers: {
     fontSize: theme.fontSize.sm,
     color: theme.colors.textSecondary,
+  },
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  managerButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: theme.colors.primary,
+    backgroundColor: `${theme.colors.primary}15`,
+  },
+  managerButtonText: {
+    color: theme.colors.primary,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.bold,
   },
   customerNumberBadge: {
     paddingVertical: 8,

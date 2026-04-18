@@ -20,6 +20,11 @@ export const authApi = {
   login: (venueId: string, staffId: string, pin: string) =>
     api.post("/api/auth/login", { venueId, staffId, pin }),
   getStaff: (venueId: string) => api.get(`/api/auth/staff/${venueId}`),
+  // Verify a PIN belongs to a manager-role staff at this venue.
+  // Used for privileged actions like viewing reports, large discounts,
+  // voiding sent items (future), etc.
+  verifyManagerPin: (venueId: string, pin: string) =>
+    api.post("/api/auth/verify-manager-pin", { venueId, pin }),
 };
 
 // ─── Venue ───────────────────────────────────────────────────────────────────
@@ -94,9 +99,6 @@ export const orderApi = {
   transferOrder: (orderId: string, tableId: string) =>
     api.patch(`/api/orders/${orderId}/transfer`, { tableId }),
 
-  // Explicitly send all PENDING items on an order to the kitchen.
-  // Store Table and Pay flows call this automatically on the backend;
-  // this is for when staff want to fire items early (e.g. "fire starters now").
   sendToKitchen: (orderId: string, staffId: string) =>
     api.post(`/api/orders/${orderId}/send-to-kitchen`, { staffId }),
 
@@ -148,4 +150,18 @@ export const orderApi = {
 // ─── Tables ──────────────────────────────────────────────────────────────────
 export const tableApi = {
   getTablePlan: (venueId: string) => api.get(`/api/tables/plan/${venueId}`),
+};
+
+// ─── Reports ─────────────────────────────────────────────────────────────────
+// Reports return aggregated read-only data. Every call is scoped to a venue
+// and typically a date range. Step 3 fills in the Z-read endpoint.
+export const reportsApi = {
+  zRead: (
+    venueId: string,
+    from: string, // ISO date string
+    to: string,   // ISO date string
+  ) =>
+    api.get(`/api/reports/z-read/${venueId}`, {
+      params: { from, to },
+    }),
 };

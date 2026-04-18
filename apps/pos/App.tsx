@@ -7,6 +7,8 @@ import PinLoginScreen from "./src/screens/auth/PinLoginScreen";
 import TablePlanScreen from "./src/screens/pos/TablePlanScreen";
 import OrderScreen from "./src/screens/pos/OrderScreen";
 import PaymentScreen from "./src/screens/pos/PaymentScreen";
+import ReportsScreen from "./src/screens/reports/ReportsScreen";
+import ZReadScreen from "./src/screens/reports/ZReadScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -26,6 +28,8 @@ export default function App() {
           <Stack.Screen name="TablePlan" component={TablePlanScreen} />
           <Stack.Screen name="Order" component={OrderScreen} />
           <Stack.Screen name="Payment" component={PaymentScreen} />
+          <Stack.Screen name="Reports" component={ReportsScreen} />
+          <Stack.Screen name="ZRead" component={ZReadScreen} />
         </Stack.Navigator>
       </View>
     </NavigationContainer>

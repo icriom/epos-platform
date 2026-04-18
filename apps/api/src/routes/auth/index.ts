@@ -27,7 +27,6 @@ export default async function authRoutes(fastify: FastifyInstance) {
         email, pin, roleId, backOfficeAccess
       } = request.body;
 
-      // Hash the PIN
       const pinHash = await bcrypt.hash(pin, SALT_ROUNDS);
 
       const staff = await prisma.staff.create({
@@ -53,7 +52,6 @@ export default async function authRoutes(fastify: FastifyInstance) {
           isActive: true,
           backOfficeAccess: true,
           createdAt: true
-          // pinHash deliberately excluded from response
         }
       });
 
@@ -80,7 +78,6 @@ export default async function authRoutes(fastify: FastifyInstance) {
     try {
       const { venueId, staffId, pin } = request.body;
 
-      // Find the staff member
       const staff = await prisma.staff.findFirst({
         where: {
           id: staffId,
@@ -96,7 +93,6 @@ export default async function authRoutes(fastify: FastifyInstance) {
         return { success: false, error: 'Staff member not found' };
       }
 
-      // Verify PIN
       const pinValid = await bcrypt.compare(pin, staff.pinHash);
 
       if (!pinValid) {
@@ -104,7 +100,6 @@ export default async function authRoutes(fastify: FastifyInstance) {
         return { success: false, error: 'Invalid PIN' };
       }
 
-      // Generate JWT token
       const token = jwt.sign(
         {
           staffId: staff.id,
@@ -134,6 +129,63 @@ export default async function authRoutes(fastify: FastifyInstance) {
     } catch (error) {
       reply.status(500);
       return { success: false, error: 'Login failed' };
+    }
+  });
+
+  // POST /auth/verify-manager-pin — check a PIN belongs to a Manager at this venue.
+  // Used for privileged actions (reports, large discounts, sent-item voids).
+  // Returns the manager's id and displayName on success so the caller can log
+  // who authorised. Does NOT issue a new JWT — we're not logging them in,
+  // just authorising a single action.
+  fastify.post<{
+    Body: {
+      venueId: string;
+      pin: string;
+    }
+  }>('/verify-manager-pin', async (request, reply) => {
+    try {
+      const { venueId, pin } = request.body;
+
+      // Find all Manager-role staff at this venue — there may be multiple
+      const managers = await prisma.staff.findMany({
+        where: {
+          venueId,
+          isActive: true,
+          deletedAt: null,
+          role: {
+            name: 'Manager',
+          },
+        },
+        select: {
+          id: true,
+          displayName: true,
+          pinHash: true,
+        },
+      });
+
+      // Check each manager's hash against the entered PIN
+      for (const manager of managers) {
+        const match = await bcrypt.compare(pin, manager.pinHash);
+        if (match) {
+          return {
+            success: true,
+            data: {
+              id: manager.id,
+              displayName: manager.displayName,
+            },
+          };
+        }
+      }
+
+      // No match found
+      reply.status(401);
+      return {
+        success: false,
+        error: 'Invalid PIN or not a manager',
+      };
+    } catch (error) {
+      reply.status(500);
+      return { success: false, error: 'Verification failed' };
     }
   });
 
