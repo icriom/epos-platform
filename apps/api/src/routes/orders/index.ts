@@ -271,6 +271,64 @@ export default async function orderRoutes(fastify: FastifyInstance) {
     }
   });
 
+  // ─── Transfer an order to a different table ────────────────────────────────
+  // Moves an OPEN order to a new table. The destination must be empty —
+  // if it has an open order, we return a 409 so the client can offer a
+  // merge option (merge logic is a separate feature, coming later).
+  fastify.patch<{
+    Params: { id: string };
+    Body: { tableId: string };
+  }>("/:id/transfer", async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const { tableId } = request.body;
+
+      // Check the source order exists and is open
+      const sourceOrder = await prisma.order.findUnique({
+        where: { id },
+        select: { id: true, status: true, tableId: true },
+      });
+
+      if (!sourceOrder) {
+        reply.status(404);
+        return { success: false, error: "Order not found" };
+      }
+      if (sourceOrder.status !== "OPEN") {
+        reply.status(400);
+        return { success: false, error: "Only OPEN orders can be transferred" };
+      }
+      if (sourceOrder.tableId === tableId) {
+        reply.status(400);
+        return { success: false, error: "Order is already on this table" };
+      }
+
+      // Check the destination table is empty (no OPEN order)
+      const existingOnDestination = await prisma.order.findFirst({
+        where: { tableId, status: "OPEN" },
+        select: { id: true },
+      });
+      if (existingOnDestination) {
+        reply.status(409);
+        return {
+          success: false,
+          error: "Destination table already has an open order",
+          code: "TABLE_OCCUPIED",
+        };
+      }
+
+      // Do the transfer
+      const updated = await prisma.order.update({
+        where: { id },
+        data: { tableId },
+      });
+
+      return { success: true, data: updated };
+    } catch (error) {
+      reply.status(500);
+      return { success: false, error: "Failed to transfer order" };
+    }
+  });
+
   // ─── Update item quantity ───────────────────────────────────────────────────
   fastify.patch<{
     Params: { id: string; itemId: string };
@@ -435,16 +493,6 @@ export default async function orderRoutes(fastify: FastifyInstance) {
   });
 
   // ─── Record partial payment ─────────────────────────────────────────────────
-  // Takes a payment against an open order without closing it.
-  // The order stays OPEN with amountPaid updated.
-  // When amountPaid >= total the order is automatically closed.
-  //
-  // Two ways to mark items as paid:
-  //   itemIds      — whole order-item lines paid for in full
-  //   unitSplits   — partial quantity payments; the line is split so
-  //                  the paid portion shows as a separate PAID line.
-  //                  Example: pay for 1 of 4 Guinness → original line
-  //                  becomes 3x Guinness (OPEN), new line 1x Guinness (PAID).
   fastify.post<{
     Params: { id: string };
     Body: {
@@ -479,7 +527,6 @@ export default async function orderRoutes(fastify: FastifyInstance) {
       const orderTotal = Number(order.total);
       const isFullyPaid = newAmountPaid >= orderTotal;
 
-      // Record the payment transaction
       await prisma.payment.create({
         data: {
           orderId: id,
@@ -492,7 +539,6 @@ export default async function orderRoutes(fastify: FastifyInstance) {
         },
       });
 
-      // Mark items paid in full
       if (itemIds && itemIds.length > 0) {
         await prisma.orderItem.updateMany({
           where: { id: { in: itemIds }, orderId: id },
@@ -500,7 +546,6 @@ export default async function orderRoutes(fastify: FastifyInstance) {
         });
       }
 
-      // Handle partial-quantity splits
       if (unitSplits && unitSplits.length > 0) {
         for (const split of unitSplits) {
           const original = await prisma.orderItem.findUnique({
@@ -510,7 +555,6 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           if (split.paidQuantity <= 0) continue;
 
           if (split.paidQuantity >= original.quantity) {
-            // Whole line paid — just mark as PAID
             await prisma.orderItem.update({
               where: { id: split.itemId },
               data: { status: "PAID" },
@@ -527,7 +571,6 @@ export default async function orderRoutes(fastify: FastifyInstance) {
           const remainingVatAmount = (remainingLineTotal * vatRate) / 100;
 
           await prisma.$transaction(async (tx) => {
-            // Reduce original line to remaining quantity
             await tx.orderItem.update({
               where: { id: split.itemId },
               data: {
@@ -536,7 +579,6 @@ export default async function orderRoutes(fastify: FastifyInstance) {
                 vatAmount: remainingVatAmount,
               },
             });
-            // Create new PAID line for the paid portion
             await tx.orderItem.create({
               data: {
                 orderId: id,
@@ -557,12 +599,13 @@ export default async function orderRoutes(fastify: FastifyInstance) {
         }
       }
 
-      // Update the order — close it if fully paid, otherwise keep OPEN
       const updatedOrder = await prisma.order.update({
         where: { id },
         data: {
           amountPaid: newAmountPaid,
-          ...(isFullyPaid ? { status: "PAID", paidAt: new Date() } : {}),
+          ...(isFullyPaid
+            ? { status: "PAID", paidAt: new Date() }
+            : {}),
         },
         include: {
           items: {

@@ -32,7 +32,6 @@ interface TablePlan {
   tables: Table[];
 }
 
-// Minimal shape for an open order on the floor plan
 interface OpenTableOrder {
   id: string;
   tableId: string;
@@ -42,23 +41,31 @@ interface OpenTableOrder {
 }
 
 export default function TablePlanScreen({ route, navigation }: any) {
-  const { sessionId: paramSessionId } = route.params ?? {};
+  // transferOrderId and transferFromTableNumber are passed when this screen
+  // is opened in transfer mode from OrderScreen. If present, the behaviour
+  // changes: only empty tables are tappable, and tapping one does a transfer
+  // instead of opening the order.
+  const {
+    sessionId: paramSessionId,
+    transferOrderId,
+    transferFromTableNumber,
+  } = route.params ?? {};
+
+  const isTransferMode = !!transferOrderId;
+
   const [plans, setPlans] = useState<TablePlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [activePlan, setActivePlan] = useState(0);
-  // Map of tableId → OpenTableOrder for quick lookup
   const [openTableOrders, setOpenTableOrders] = useState<
     Record<string, OpenTableOrder>
   >({});
+  const [transferring, setTransferring] = useState(false);
   const { staff, venueId, sessionId, setSession, logout } = useAuthStore();
 
-  // Load the floor plan once on mount
   useEffect(() => {
     loadFloorPlan();
   }, []);
 
-  // Refresh table statuses every time the screen comes into focus
-  // (e.g. returning from OrderScreen after storing or paying a table)
   useFocusEffect(
     useCallback(() => {
       refreshTableStatuses();
@@ -87,7 +94,6 @@ export default function TablePlanScreen({ route, navigation }: any) {
     }
   };
 
-  // Fetch all open orders that have a tableId, build a lookup map
   const refreshTableStatuses = async () => {
     if (!venueId) return;
     try {
@@ -99,11 +105,12 @@ export default function TablePlanScreen({ route, navigation }: any) {
       });
       setOpenTableOrders(map);
     } catch {
-      // Non-fatal — floor plan still shows, just without live status
+      // Non-fatal
     }
   };
 
-  const handleTablePress = async (table: Table) => {
+  // Normal mode — tap opens the order (or creates new)
+  const handleNormalTablePress = async (table: Table) => {
     if (!sessionId) {
       Alert.alert(
         "No Open Session",
@@ -119,15 +126,71 @@ export default function TablePlanScreen({ route, navigation }: any) {
     const existingOrder = openTableOrders[table.id];
 
     if (existingOrder) {
-      // Table is occupied — reopen the existing order
       navigation.navigate("Order", {
         table,
         sessionId,
         existingOrderId: existingOrder.id,
       });
     } else {
-      // Table is empty — open a new order
       navigation.navigate("Order", { table, sessionId });
+    }
+  };
+
+  // Transfer mode — tapping an empty table transfers the order to it
+  const handleTransferTablePress = async (table: Table) => {
+    if (openTableOrders[table.id]) {
+      // Destination occupied — for now, simply inform the user.
+      // Merge logic will come later.
+      Alert.alert(
+        "Table Occupied",
+        `Table ${table.tableNumber} already has an open order. Merge tables is coming in a future update.`,
+      );
+      return;
+    }
+
+    Alert.alert(
+      "Transfer Order",
+      `Transfer from Table ${transferFromTableNumber} to Table ${table.tableNumber}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Transfer",
+          onPress: async () => {
+            setTransferring(true);
+            try {
+              await orderApi.transferOrder(transferOrderId, table.id);
+              // Refresh statuses before returning so floor plan reflects change
+              await refreshTableStatuses();
+              // Navigate back to OrderScreen with the NEW table info
+              navigation.navigate("Order", {
+                table,
+                sessionId,
+                existingOrderId: transferOrderId,
+              });
+            } catch (error: any) {
+              const apiError = error?.response?.data;
+              if (apiError?.code === "TABLE_OCCUPIED") {
+                Alert.alert(
+                  "Table Occupied",
+                  "Another device just opened an order on that table. Try a different one.",
+                );
+              } else {
+                Alert.alert("Error", "Could not transfer order");
+              }
+            } finally {
+              setTransferring(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleTablePress = (table: Table) => {
+    if (isTransferMode) {
+      handleTransferTablePress(table);
+    } else {
+      handleNormalTablePress(table);
     }
   };
 
@@ -146,17 +209,14 @@ export default function TablePlanScreen({ route, navigation }: any) {
     }
   };
 
-  // Determine the border/fill colour for a table tile
   const getTableStatusColour = (table: Table): string => {
     const openOrder = openTableOrders[table.id];
     if (!openOrder) return theme.colors.tableAvailable;
 
     const amountPaid = parseFloat(openOrder.amountPaid);
     if (amountPaid > 0) {
-      // Partial payment has been taken — show payment colour
       return theme.colors.tablePayment;
     }
-    // Order open, nothing paid yet — occupied
     return theme.colors.tableOccupied;
   };
 
@@ -176,23 +236,47 @@ export default function TablePlanScreen({ route, navigation }: any) {
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <Text style={styles.venueName}>The Harbour Inn</Text>
-          <Text style={styles.sessionStatus}>
-            {sessionId ? "● Session Open" : "○ No Session"}
+          <Text style={styles.venueName}>
+            {isTransferMode
+              ? `Transfer Table ${transferFromTableNumber}`
+              : "The Harbour Inn"}
+          </Text>
+          <Text
+            style={[
+              styles.sessionStatus,
+              isTransferMode && { color: theme.colors.warning },
+            ]}
+          >
+            {isTransferMode
+              ? "Select an empty table"
+              : sessionId
+              ? "● Session Open"
+              : "○ No Session"}
           </Text>
         </View>
 
         <View style={styles.headerRight}>
-          <TouchableOpacity
-            onPress={() => navigation.navigate("Order")}
-            style={styles.backToTillButton}
-          >
-            <Text style={styles.backToTillText}>← Till</Text>
-          </TouchableOpacity>
-          <Text style={styles.staffName}>{staff?.displayName}</Text>
-          <TouchableOpacity onPress={logout} style={styles.logoutButton}>
-            <Text style={styles.logoutText}>Log Out</Text>
-          </TouchableOpacity>
+          {isTransferMode ? (
+            <TouchableOpacity
+              onPress={() => navigation.goBack()}
+              style={styles.cancelTransferButton}
+            >
+              <Text style={styles.cancelTransferText}>Cancel Transfer</Text>
+            </TouchableOpacity>
+          ) : (
+            <>
+              <TouchableOpacity
+                onPress={() => navigation.navigate("Order")}
+                style={styles.backToTillButton}
+              >
+                <Text style={styles.backToTillText}>← Till</Text>
+              </TouchableOpacity>
+              <Text style={styles.staffName}>{staff?.displayName}</Text>
+              <TouchableOpacity onPress={logout} style={styles.logoutButton}>
+                <Text style={styles.logoutText}>Log Out</Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </View>
 
@@ -218,12 +302,25 @@ export default function TablePlanScreen({ route, navigation }: any) {
         </View>
       )}
 
+      {/* Transfer mode banner */}
+      {isTransferMode && (
+        <View style={styles.transferBanner}>
+          <Text style={styles.transferBannerText}>
+            Tap an empty (green) table to transfer the order. Occupied tables
+            are shown but cannot be selected.
+          </Text>
+        </View>
+      )}
+
       {/* Floor plan */}
       <ScrollView style={styles.floorPlanContainer}>
         <View style={styles.floorPlan}>
           {currentPlan?.tables.map((table) => {
             const statusColour = getTableStatusColour(table);
             const openOrder = openTableOrders[table.id];
+            const isOccupied = !!openOrder;
+            // In transfer mode, dim occupied tables to indicate they can't be used
+            const dimmed = isTransferMode && isOccupied;
             return (
               <TouchableOpacity
                 key={table.id}
@@ -240,10 +337,12 @@ export default function TablePlanScreen({ route, navigation }: any) {
                         : theme.borderRadius.md,
                     borderColor: statusColour,
                     backgroundColor: `${statusColour}22`,
+                    opacity: dimmed ? 0.35 : 1,
                   },
                 ]}
                 onPress={() => handleTablePress(table)}
                 activeOpacity={0.7}
+                disabled={transferring}
               >
                 <Text style={[styles.tableNumber, { color: statusColour }]}>
                   {table.tableNumber}
@@ -259,6 +358,13 @@ export default function TablePlanScreen({ route, navigation }: any) {
           })}
         </View>
       </ScrollView>
+
+      {transferring && (
+        <View style={styles.transferOverlay}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={styles.transferOverlayText}>Transferring...</Text>
+        </View>
+      )}
 
       {/* Status bar */}
       <View style={styles.statusBar}>
@@ -357,6 +463,19 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
   },
+  cancelTransferButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.error,
+    backgroundColor: `${theme.colors.error}15`,
+  },
+  cancelTransferText: {
+    color: theme.colors.error,
+    fontSize: theme.fontSize.md,
+    fontWeight: theme.fontWeight.bold,
+  },
   staffName: {
     fontSize: theme.fontSize.md,
     color: theme.colors.textPrimary,
@@ -390,6 +509,17 @@ const styles = StyleSheet.create({
     color: theme.colors.primary,
     fontWeight: theme.fontWeight.bold,
   },
+  transferBanner: {
+    padding: 12,
+    backgroundColor: `${theme.colors.warning}20`,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.warning,
+  },
+  transferBannerText: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.fontSize.sm,
+    textAlign: "center",
+  },
   floorPlanContainer: {
     flex: 1,
   },
@@ -418,6 +548,22 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.xs,
     fontWeight: theme.fontWeight.bold,
     marginTop: 2,
+  },
+  transferOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 12,
+  },
+  transferOverlayText: {
+    color: theme.colors.textPrimary,
+    fontSize: theme.fontSize.lg,
+    fontWeight: theme.fontWeight.bold,
   },
   statusBar: {
     flexDirection: "row",

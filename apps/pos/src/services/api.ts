@@ -91,13 +91,18 @@ export const orderApi = {
   updateStatus: (orderId: string, status: string) =>
     api.patch(`/api/orders/${orderId}/status`, { status }),
 
+  // Move an order to a different table. Destination must be empty.
+  // Returns a 409 with code: "TABLE_OCCUPIED" if the destination
+  // already has an open order.
+  transferOrder: (orderId: string, tableId: string) =>
+    api.patch(`/api/orders/${orderId}/transfer`, { tableId }),
+
   updateItemQuantity: (orderId: string, itemId: string, quantity: number) =>
     api.patch(`/api/orders/${orderId}/items/${itemId}/quantity`, { quantity }),
 
   voidItem: (orderId: string, itemId: string) =>
     api.patch(`/api/orders/${orderId}/items/${itemId}/void`),
 
-  // Full payment — closes the order
   recordPayment: (
     orderId: string,
     amount: number,
@@ -110,11 +115,6 @@ export const orderApi = {
       amountTendered,
     }),
 
-  // Partial payment — order stays OPEN.
-  // itemIds       — item lines paid for in full
-  // unitSplits    — partial-quantity payments; each split causes
-  //                 the original line to be divided into a remaining OPEN
-  //                 line plus a new PAID line for the paid portion.
   recordPartialPayment: (
     orderId: string,
     amount: number,

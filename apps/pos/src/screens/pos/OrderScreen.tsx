@@ -64,7 +64,7 @@ export default function OrderScreen({ route, navigation }: any) {
   const {
     table,
     sessionId: paramSessionId,
-    existingOrderId, // passed from TablePlanScreen when reopening a table
+    existingOrderId,
   } = route.params ?? {};
   const { staff, venueId } = useAuthStore();
 
@@ -81,13 +81,15 @@ export default function OrderScreen({ route, navigation }: any) {
   const [itemModalVisible, setItemModalVisible] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
 
+  const isTableOrder = !!table;
+
   useEffect(() => {
     initialise();
   }, []);
 
   const initialise = async () => {
     try {
-      // Load menu
+      // Load menu — needed either way
       const menuResponse = await menuApi.getMenu(venueId!);
       const menus = menuResponse.data.data;
       if (menus.length > 0) {
@@ -96,43 +98,43 @@ export default function OrderScreen({ route, navigation }: any) {
         if (cats.length > 0) setActiveCategory(cats[0].id);
       }
 
-      // Resolve session
+      // Resolve session id
       let resolvedSessionId = paramSessionId;
       if (!resolvedSessionId) {
-        const sessionResponse = await sessionApi.getCurrentSession(venueId!);
-        resolvedSessionId = sessionResponse.data.data.id;
-        setSessionId(resolvedSessionId);
+        try {
+          const sessionResponse = await sessionApi.getCurrentSession(venueId!);
+          resolvedSessionId = sessionResponse.data.data.id;
+          setSessionId(resolvedSessionId);
+        } catch {
+          // No open session yet — handled later
+        }
       }
 
+      // Order resolution:
+      //   - existingOrderId passed → load it (reopening a stored table)
+      //   - table passed → create the table order straight away
+      //   - walk-in with no existingOrderId → DON'T create yet. The order
+      //     will be created lazily when the user adds their first item.
+      //     This prevents empty walk-in orders cluttering the database.
       if (existingOrderId) {
-        // ── Reopen an existing table order ──────────────────────────────────
         const orderResponse = await orderApi.getOrder(existingOrderId);
         const existingOrder = orderResponse.data.data;
         setOrderId(existingOrder.id);
         setOrder(existingOrder);
-      } else {
-        // ── Create a new order (walk-in or new table) ────────────────────────
-        const orderPayload = table
-          ? {
-              venueId: venueId!,
-              sessionId: resolvedSessionId,
-              staffId: staff!.id,
-              tableId: table.id,
-              covers: table.covers,
-              orderType: "TABLE",
-            }
-          : {
-              venueId: venueId!,
-              sessionId: resolvedSessionId,
-              staffId: staff!.id,
-              orderType: "WALK_IN",
-            };
-
-        const orderResponse = await orderApi.createOrder(orderPayload);
+      } else if (table && resolvedSessionId) {
+        const orderResponse = await orderApi.createOrder({
+          venueId: venueId!,
+          sessionId: resolvedSessionId,
+          staffId: staff!.id,
+          tableId: table.id,
+          covers: table.covers,
+          orderType: "TABLE",
+        });
         const newOrder = orderResponse.data.data;
         setOrderId(newOrder.id);
         setOrder(newOrder);
       }
+      // else: walk-in, leave orderId/order null until first item is added
     } catch (error) {
       Alert.alert("Error", "Could not initialise order");
     } finally {
@@ -140,23 +142,54 @@ export default function OrderScreen({ route, navigation }: any) {
     }
   };
 
+  // Lazily creates the walk-in order on first item add so empty orders
+  // don't pile up in the database. Returns the new orderId.
+  const ensureWalkInOrder = async (): Promise<string | null> => {
+    if (orderId) return orderId;
+    if (!sessionId) {
+      Alert.alert("No Session", "No trading session is open");
+      return null;
+    }
+    try {
+      const response = await orderApi.createOrder({
+        venueId: venueId!,
+        sessionId,
+        staffId: staff!.id,
+        orderType: "WALK_IN",
+      });
+      const newOrder = response.data.data;
+      setOrderId(newOrder.id);
+      setOrder(newOrder);
+      return newOrder.id;
+    } catch {
+      Alert.alert("Error", "Could not create order");
+      return null;
+    }
+  };
+
   const handleAddItem = async (item: MenuItem) => {
-    if (!orderId) return;
+    // For walk-ins, lazily create the order on the first item add
+    let activeOrderId = orderId;
+    if (!activeOrderId) {
+      activeOrderId = await ensureWalkInOrder();
+      if (!activeOrderId) return;
+    }
+
     setAddingItem(item.id);
     try {
       const existing = order?.items?.find(
-        (i) => i.menuItemId === item.id && i.status !== "VOID",
+        (i) => i.menuItemId === item.id && i.status !== "VOID" && i.status !== "PAID",
       );
 
       if (existing) {
         const response = await orderApi.updateItemQuantity(
-          orderId,
+          activeOrderId,
           existing.id,
           existing.quantity + 1,
         );
         setOrder(response.data.data);
       } else {
-        await orderApi.addItem(orderId, {
+        await orderApi.addItem(activeOrderId, {
           menuItemId: item.id,
           menuItemName: item.name,
           quantity: 1,
@@ -165,7 +198,7 @@ export default function OrderScreen({ route, navigation }: any) {
           vatRate: parseFloat(item.vatRate),
           course: item.course,
         });
-        const orderResponse = await orderApi.getOrder(orderId);
+        const orderResponse = await orderApi.getOrder(activeOrderId);
         setOrder(orderResponse.data.data);
       }
     } catch (error) {
@@ -176,6 +209,7 @@ export default function OrderScreen({ route, navigation }: any) {
   };
 
   const handleItemPress = (item: OrderItem) => {
+    if (item.status === "PAID") return;
     setSelectedItem(item);
     setItemModalVisible(true);
   };
@@ -230,7 +264,6 @@ export default function OrderScreen({ route, navigation }: any) {
     }
   };
 
-  // For walk-in orders: cancel and void the order
   const handleCancelSale = () => {
     Alert.alert(
       "Cancel Sale",
@@ -242,7 +275,9 @@ export default function OrderScreen({ route, navigation }: any) {
           style: "destructive",
           onPress: async () => {
             try {
-              await orderApi.updateStatus(orderId!, "VOID");
+              if (orderId) {
+                await orderApi.updateStatus(orderId, "VOID");
+              }
               navigation.replace("Order");
             } catch (error) {
               Alert.alert("Error", "Could not cancel sale");
@@ -253,10 +288,17 @@ export default function OrderScreen({ route, navigation }: any) {
     );
   };
 
-  // For table orders: store the table and return to the floor plan.
-  // The order stays OPEN — the table will show as occupied (green) on return.
   const handleStoreTable = () => {
     navigation.navigate("TablePlan", { sessionId });
+  };
+
+  const handleTransferTable = () => {
+    if (!orderId || !table) return;
+    navigation.navigate("TablePlan", {
+      sessionId,
+      transferOrderId: orderId,
+      transferFromTableNumber: table.tableNumber,
+    });
   };
 
   const handlePay = () => {
@@ -274,7 +316,6 @@ export default function OrderScreen({ route, navigation }: any) {
     }
     await orderApi.updateStatus(orderId!, "SENT");
     Alert.alert("Sent to Kitchen", `Order #${order.orderNumber} sent`);
-    // For table orders stay on the screen; for walk-ins replace
     if (!table) {
       navigation.replace("Order");
     }
@@ -284,7 +325,6 @@ export default function OrderScreen({ route, navigation }: any) {
     navigation.navigate("TablePlan", { sessionId });
   };
 
-  const isTableOrder = !!table;
   const orderTitle = table ? `Table ${table.tableNumber}` : "Walk-in";
   const orderSubtitle = table ? `${table.covers} covers` : "No table assigned";
   const activeItems =
@@ -314,7 +354,6 @@ export default function OrderScreen({ route, navigation }: any) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={handleOpenTables}
@@ -335,7 +374,6 @@ export default function OrderScreen({ route, navigation }: any) {
       </View>
 
       <View style={styles.body}>
-        {/* Left — Menu */}
         <View style={styles.menuPanel}>
           <ScrollView
             horizontal
@@ -410,10 +448,11 @@ export default function OrderScreen({ route, navigation }: any) {
           />
         </View>
 
-        {/* Right — Order */}
         <View style={styles.orderPanel}>
           <View style={styles.orderHeader}>
-            <Text style={styles.orderTitle}>Order #{order?.orderNumber}</Text>
+            <Text style={styles.orderTitle}>
+              {order ? `Order #${order.orderNumber}` : "New Order"}
+            </Text>
             <Text style={styles.orderItemCount}>
               {(order?.items ?? []).length} items
             </Text>
@@ -430,7 +469,7 @@ export default function OrderScreen({ route, navigation }: any) {
                   styles.orderItem,
                   item.status === "PAID" && styles.orderItemPaid,
                 ]}
-                onPress={() => item.status !== "PAID" && handleItemPress(item)}
+                onPress={() => handleItemPress(item)}
                 activeOpacity={0.7}
               >
                 <View style={styles.orderItemLeft}>
@@ -459,7 +498,6 @@ export default function OrderScreen({ route, navigation }: any) {
             ))}
           </ScrollView>
 
-          {/* Totals */}
           <View style={styles.totals}>
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Subtotal</Text>
@@ -480,7 +518,6 @@ export default function OrderScreen({ route, navigation }: any) {
               </Text>
             </View>
 
-            {/* Partial payment balance banner */}
             {hasPartialPayment && (
               <View style={styles.balanceBanner}>
                 <View style={styles.balanceRow}>
@@ -498,16 +535,20 @@ export default function OrderScreen({ route, navigation }: any) {
               </View>
             )}
 
-            {/* Action buttons */}
             <View style={styles.actionRow}>
               {isTableOrder ? (
-                // Table order: Store Table (park it) or Cancel
                 <>
                   <TouchableOpacity
-                    style={styles.storeButton}
+                    style={styles.secondaryButton}
                     onPress={handleStoreTable}
                   >
-                    <Text style={styles.storeButtonText}>⊞ Store Table</Text>
+                    <Text style={styles.secondaryButtonText}>⊞ Store</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.secondaryButton}
+                    onPress={handleTransferTable}
+                  >
+                    <Text style={styles.secondaryButtonText}>↔ Transfer</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[
@@ -521,7 +562,6 @@ export default function OrderScreen({ route, navigation }: any) {
                   </TouchableOpacity>
                 </>
               ) : (
-                // Walk-in: Cancel or Pay
                 <>
                   <TouchableOpacity
                     style={[
@@ -550,7 +590,6 @@ export default function OrderScreen({ route, navigation }: any) {
         </View>
       </View>
 
-      {/* Item Action Modal */}
       <Modal
         visible={itemModalVisible}
         transparent
@@ -856,8 +895,8 @@ const styles = StyleSheet.create({
     fontWeight: theme.fontWeight.bold,
     color: theme.colors.warning,
   },
-  actionRow: { flexDirection: "row", gap: 8, marginTop: 12 },
-  storeButton: {
+  actionRow: { flexDirection: "row", gap: 6, marginTop: 12 },
+  secondaryButton: {
     flex: 1,
     paddingVertical: 10,
     borderRadius: theme.borderRadius.md,
@@ -865,9 +904,9 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
     alignItems: "center",
   },
-  storeButtonText: {
+  secondaryButtonText: {
     color: theme.colors.textPrimary,
-    fontSize: theme.fontSize.md,
+    fontSize: theme.fontSize.sm,
     fontWeight: theme.fontWeight.medium,
   },
   cancelButton: {
