@@ -1,7 +1,52 @@
 import axios from "axios";
+import { Platform } from "react-native";
+import Constants from "expo-constants";
 
-// Your PC's network IP — iMin connects over LAN
-const API_BASE_URL = "http://192.168.199.216:3000";
+// ─── Base URL resolution ─────────────────────────────────────────────────────
+// Order of precedence:
+//   1. Expo `extra.apiBaseUrl` — explicit override (staging, prod, custom LAN)
+//   2. Platform auto-detect — emulator vs physical device on Android
+//   3. Final fallback for anything unexpected (iOS sim, web, future targets)
+//
+// Why Constants.isDevice matters: on the Android emulator, "localhost"
+// resolves to the emulator itself, not the host PC. 10.0.2.2 is the
+// special alias that maps to the host's loopback. On the iMin (a real
+// device on LAN), we need the host PC's network IP, which is proxied
+// from Windows to WSL on port 3000 via netsh.
+//
+// To override at build/dev time, set `expo.extra.apiBaseUrl` in app.json,
+// or use an env var in app.config.js in future. Leave it null for normal
+// daily development — the auto-detect covers emulator + iMin cleanly.
+
+const EMULATOR_URL = "http://10.0.2.2:3000";
+const LAN_URL = "http://192.168.199.216:3000";
+const FALLBACK_URL = "http://localhost:3000";
+
+function resolveApiBaseUrl(): string {
+  const override = Constants.expoConfig?.extra?.apiBaseUrl as
+    | string
+    | null
+    | undefined;
+
+  if (override && typeof override === "string" && override.length > 0) {
+    return override;
+  }
+
+  if (Platform.OS === "android") {
+    // Constants.isDevice is true on physical hardware (iMin), false in emulator.
+    return Constants.isDevice ? LAN_URL : EMULATOR_URL;
+  }
+
+  return FALLBACK_URL;
+}
+
+const API_BASE_URL = resolveApiBaseUrl();
+
+// Surface the resolved URL once at startup so it's obvious which target
+// the till is hitting. Helps catch "why is my emulator hitting the iMin
+// LAN IP" type confusion at a glance.
+// eslint-disable-next-line no-console
+console.log(`[api] base URL resolved to ${API_BASE_URL}`);
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
