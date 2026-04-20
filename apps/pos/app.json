@@ -21,13 +21,17 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.icr.pos"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "extra": {
-      "apiBaseUrl": "http://192.168.199.216:3000"
+      "apiBaseUrl": "http://192.168.199.216:3000",
+      "eas": {
+        "projectId": "cbcb31d8-bb64-486b-ac34-521a71025f4a"
+      }
     }
   }
 }
