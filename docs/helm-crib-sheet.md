@@ -22,7 +22,7 @@ The project (`epos-platform`, github.com/icriom/epos-platform) is a React Native
 - `apps/pos` — Expo-based POS app
 - `apps/backoffice` and `apps/kds` — scaffolded, not yet active
 
-The app is running in **Expo Go** on the physical **iMin D4-503** Android terminal (connected via AnyDesk at 192.168.199.155). A local development build APK approach was attempted and abandoned after cascading build failures (Kotlin/Gradle/SDK/monorepo hoisting conflicts); Expo Go is the confirmed working path.
+The app runs on the physical iMin D4-503 Android terminal (connected via AnyDesk at 192.168.199.155). The primary development target is now an EAS-built development client APK, not Expo Go — Expo Go remains available as a fallback for non-native-module work but cannot load the app once native deps like the iMin printer SDK are present. A local development build APK approach (running Gradle on the Windows/WSL machine) was tried previously and abandoned after cascading build failures; EAS Build runs in Expo's cloud and avoids those entirely.
 
 **Completed and confirmed working features:**
 
@@ -40,6 +40,7 @@ The app is running in **Expo Go** on the physical **iMin D4-503** Android termin
 - Kitchen fire tracking, customer numbers, sent-item warnings, audit trail
 - Add-one on a sent line creates a new line rather than incrementing the sent one
 - Z-Read / End of Day report with date range toggle, VAT breakdown, payment/staff/item analysis (manager area)
+- EAS Build infrastructure: project linked (cbcb31d8-bb64-486b-ac34-521a71025f4a), eas.json with development, preview, and production profiles, expo-dev-client installed
 
 **No known outstanding bugs.** Session 10 closed with clean main, working tree clean, verified end-to-end on iMin.
 
@@ -69,17 +70,24 @@ Ordered by recommended priority for next session:
 - **Nodemon caches old modules in memory.** Broken files on disk may not surface until the API is restarted. Don't assume "the till is working right now" means "the code on disk is intact" — trust `git diff`, not runtime behaviour, when verifying file integrity.
 - **Keep the crib sheet current.** Outstanding-bug notes that have been silently fixed in earlier sessions can cause wasted investigation next session. When a fix lands, strike it from the horizon list at the same time.
 
+- **Never hand out full-file replacements for config files without checking what's currently there.** app.json got accidentally cleared of its EAS project ID during an unrelated apiBaseUrl change in Session 10; it had to be restored by re-running eas build:configure. For config files specifically, prefer showing the specific additions/changes rather than full replacement files, or diff against the current content before handing a replacement over.
+
+- **EAS CLI and Expo CLI auth are separate.** Logging in with npx expo login does not log in eas-cli. Run eas login explicitly even if npx expo whoami shows you already logged in.
+
+- **eas.json is the authoritative record of build profiles.** If it's not in git, it's not reproducible. Don't rely on it being created on-demand — commit it alongside the rest of the config.
+
+-**EAS project IDs are permanent.** Once expo.extra.eas.projectId is written into app.json and a build is made against it, changing the ID detaches from all prior build history on Expo's dashboard. Treat the ID as immutable — if you need a fresh project for any reason, that's a deliberate decision, not an accident.
+
 ## Approach & patterns
 
-- Sean strongly prefers receiving **complete replacement files to download** rather than inline code edits or diff patches.
-- Direct confirmation flows are preferred over intermediate Alert dialogs, particularly for payment actions on Android.
-- Development is session-based with git commits at the end of each session; known issues and pending tasks are tracked in this crib sheet.
+- For application code (.tsx, .ts, .java, etc.), Sean strongly prefers receiving complete replacement files to download rather than inline code edits or diff patches. For configuration files specifically (app.json, eas.json, package.json, tsconfig.json), prefer patches or targeted additions over full replacements — these files accumulate config from multiple tools and a full replacement risks silently clobbering fields that aren't obviously related to the current task.
+
 - Git checkouts of specific commits have been used to recover stable states when builds break. See "Recovery recipes" below for the canonical single-file restore.
 
 ## Tools & resources
 
 - **Hardware:** Windows 11 Pro desktop (dual monitors), iMin D4-503 (primary test terminal), iMin D2-402 (available), Honeywell Orbit barcode scanner
-- **Dev environment:** WSL2 / Ubuntu 24.04, VS Code, Node.js v24 via NVM, Docker Desktop (PostgreSQL 16, Redis 7), Android Studio (virtual tablet emulator), AnyDesk (remote into iMin)
+- **Dev environment:** Dev environment: WSL2 / Ubuntu 24.04, VS Code, Node.js v24 via NVM (currently v20.20.2 on the active default — needs an nvm install 24 && nvm alias default 24 to bring in line with the repo's >=22 requirement; parked as a low-priority fix), Docker Desktop (PostgreSQL 16, Redis 7), Android Studio (virtual tablet emulator), AnyDesk (remote into iMin), EAS CLI (v18.7.0+) for cloud builds
 - **Stack:** React Native / Expo (TypeScript), Fastify, Prisma, PostgreSQL, Zustand (state), React Navigation, nodemon (API hot reload)
 - **Key file locations:**
   - `apps/pos/src/screens/pos/OrderScreen.tsx`
@@ -92,8 +100,50 @@ Ordered by recommended priority for next session:
   - `apps/api/src/routes/auth/index.ts`
   - `apps/pos/src/services/api.ts`
   - `apps/api/prisma/schema.prisma`
+  - `apps/pos/eas.json`
 - **Test venue:** The Harbour Inn, Douglas, IoM — with staff (Sean / Manager, Amy, Tom, Sarah), full menu with categories and items, active trading sessions and orders
 - **Competitive intelligence:** Tapldoo (MWBS / Ripple on the Island) assessed and found to be payments-first with thin hospitality features — not a deep competitor on feature depth
+
+Expo project identity:
+
+Account: icr on expo.dev
+Project slug: pos
+Project ID: cbcb31d8-bb64-486b-ac34-521a71025f4a (stored in apps/pos/app.json under expo.extra.eas.projectId)
+Project URL: https://expo.dev/accounts/icr/projects/pos
+
+
+Host machine usernames — small but painful if forgotten:
+
+Windows user: Sean (Downloads folder path from WSL is /mnt/c/Users/Sean/Downloads/)
+Linux / WSL user: icr
+These are intentionally different; don't assume they match.
+
+- **EAS Build workflow:** Day-to-day, you still run Metro locally via npx expo start in apps/pos/. The dev client APK on the iMin connects to it the same way Expo Go used to. The difference: the dev client includes any native modules we've installed (like the iMin printer SDK in Session 12 onwards); Expo Go can't load the app at all once those are present.
+When to rebuild the dev client APK:
+Rebuild is needed when:
+
+A new native dependency is added (expo-dev-client itself, react-native-printer-imin, anything with an android/ or ios/ directory)
+Expo SDK is upgraded
+app.json native-config fields change (app name, bundle identifier, permissions, icons, splash)
+A config plugin is added or its config changes
+
+Rebuild is not needed for ordinary code changes — adding a screen, changing a reducer, tweaking styles, modifying API calls. Metro serves those live the same as always.
+Build command (from apps/pos/):
+basheas build --platform android --profile development
+Expect a 10-15 minute cloud queue plus 10-15 minute actual build time. Free-tier concurrency limits mean wait times can vary. Expo sends an email when the build completes. Watch the Expo dashboard at the project URL for live status.
+Install the APK onto the iMin:
+Once the build completes, a download URL is shown in terminal and emailed. Download the .apk file to the Windows Downloads folder. Install on the iMin via USB + ADB:
+bash# Check iMin is connected and authorised
+adb devices
+
+# Install (replace filename with actual)
+adb install /mnt/c/Users/Sean/Downloads/pos-<hash>.apk
+
+# If replacing a previous dev client:
+adb install -r /mnt/c/Users/Sean/Downloads/pos-<hash>.apk
+Launch and connect:
+On the iMin, open the newly-installed "pos" app (not Expo Go). It should show a screen prompting for the dev server URL. Enter http://192.168.199.216:8081 (same URL Expo Go uses). The bundle downloads and runs.
+
 
 ### Recovery recipes
 
