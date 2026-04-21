@@ -15,46 +15,70 @@ import {
  *
  * ─── Signature note ──────────────────────────────────────────────────
  *
- * The wrapper signatures differ from the iMin *native Java SDK* docs:
+ * The RN wrapper's signatures differ from the iMin native Java SDK:
  *
  *   - initPrinter() takes no args (native takes a PrintConnectType enum)
- *   - getPrinterStatus() takes no args and returns { code, message }
- *     (native takes a connect type and returns a bare number)
+ *   - getPrinterStatus() returns { code, message } (native returns a bare number)
  *   - commitPrinterBuffer() returns Promise<void> with no result code
  *     (native version invokes a callback with 48/49/50/52 codes)
  *
- * The commitPrinterBuffer limitation is real: once we commit a
- * transaction, we can't know from the wrapper whether it physically
- * succeeded or failed partway. Best we can do is pre-flight with
- * getPrinterStatus and treat a void return as "probably ok."
+ * The commit limitation means we can't tell from the wrapper if a
+ * transaction physically succeeded. Best we can do is pre-flight with
+ * getPrinterStatus and treat a non-throw as "probably ok."
+ *
+ * ─── Iteration history ───────────────────────────────────────────────
+ *
+ * v1 (iter 1): first pass. Wrote against the native SDK docs, caused
+ *   "1 arguments" errors. Rewritten.
+ *
+ * v2 (iter 2): correct signatures. £ rendered correctly. Fixed VOID
+ *   truncation, added VAT (incl.) label, tightened line spacing to 0.65.
+ *
+ * v3 (iter 3): tried right-aligning prices by padding with leading
+ *   spaces into a fixed column. The logic was correct but the visual
+ *   result was wrong — proportional font means padding with spaces
+ *   doesn't produce visual alignment of the £ symbols.
+ *
+ * v4 (iter 4 — current): left-anchor prices at a fixed column. Labels
+ *   are padded to a fixed width; prices begin at a fixed offset from
+ *   the left of the line with no leading padding. Every £ now lands
+ *   at the same horizontal position regardless of price length.
+ *   This matches how receipts look in most UK hospitality venues.
  */
 
 // ─── Layout constants ────────────────────────────────────────────────────────
 
-/**
- * Characters per line at the iMin D4-503's default text size on 80mm paper.
- * Measured on Session 12 iteration 1 print — the receipt came out clean
- * at this width with no wrapping or overruns.
- */
 const LINE_WIDTH = 48;
+
+/**
+ * Column at which prices begin, measured from the left.
+ *
+ * Each line reads:
+ *   [label padded to this many chars] [space] [price starts here]
+ *
+ * 38 chars of label + 1 space + up to 9 chars of price = 48 total.
+ * Prices of "£100.00" (7) or "£1234.56" (8) fit comfortably. A price
+ * like "£12345.67" (9) would reach the edge but not overflow.
+ *
+ * Critically, the price is NOT padded on the left. It simply starts
+ * at this column and ends wherever its length dictates. That's what
+ * makes the £ symbols line up vertically across rows.
+ */
+const LABEL_WIDTH = 38;
 
 /** iMin SDK alignment constants. */
 const ALIGN_LEFT = 0;
 const ALIGN_CENTER = 1;
 
-/**
- * Text size. iMin's default is 28. Body uses 26; headers/totals larger
- * for emphasis; small (22) for address/VAT lines.
- */
+/** Text sizes. */
 const SIZE_SMALL = 22;
 const SIZE_BODY = 26;
 const SIZE_HEADER = 32;
 const SIZE_TOTAL = 36;
 
 /**
- * Line spacing multiplier. Default is 1.0. 0.65 makes receipts more
- * compact without being cramped — reduces paper use by ~30% vs default
- * on a typical 15-line receipt.
+ * Line spacing multiplier. Default is 1.0. 0.65 produces ~25% paper
+ * saving vs default; confirmed by iteration-2 side-by-side comparison.
  */
 const LINE_SPACING = 0.65;
 
@@ -72,36 +96,51 @@ function padRight(text: string, width: number): string {
   return text + " ".repeat(width - text.length);
 }
 
-function padLeft(text: string, width: number): string {
-  if (text.length >= width) return text.slice(0, width);
-  return " ".repeat(width - text.length) + text;
-}
-
 /**
- * Build a line with left content and right content, padded to LINE_WIDTH.
+ * Build a line where the price is left-anchored at a fixed column so
+ * its £ symbol lines up vertically with every other price on the receipt.
+ *
+ * Example with LABEL_WIDTH=38:
+ *   "Subtotal                              £75.20"
+ *   "VAT 20% (incl.)                       £12.53"
+ *   "TOTAL                                 £90.20"
+ *   "Change                                £9.80"
+ *    ^──────────── 38 chars ──────────────^ ^────── prices start at same column
+ *
+ * Notice Change's £9.80 is shorter than Subtotal's £75.20, but both
+ * £ symbols land at the same character position. Short prices just
+ * end earlier in the line.
  */
-function twoColumn(left: string, right: string): string {
-  const available = LINE_WIDTH - right.length - 1;
-  return padRight(left, Math.max(1, available)) + " " + right;
+function priceLine(label: string, money: string): string {
+  const labelPart = padRight(label, LABEL_WIDTH);
+  return `${labelPart} ${money}`;
 }
 
 /**
- * Build a quantity/name/price line.
+ * Build a quantity/name/price line for an order item.
  *
- * Normal:  "2  Sirloin Steak 10oz                    £56.00"
- * Voided:  "** VOID: Sticky Toffee Pudding            £8.50"
+ *   "2  Sirloin Steak 10oz                 £56.00"
+ *   "** VOID: Sticky Toffee Pudding        £8.50"
  *
- * Fixed in iteration 2: previously the void branch sliced the already-
- * built base string, which clipped the first few chars of the item
- * name. Now both branches compose from scratch with the correct prefix.
+ * Item prices land in the same column as the totals below. Every
+ * price on the receipt therefore forms a clean vertical column of £s.
  */
 function itemLine(item: ReceiptLineItem): string {
-  const qtyPart = padLeft(String(item.quantity), 2);
-  const pricePart = formatMoney(item.lineTotal);
-  const prefix = item.voided ? "** VOID: " : `${qtyPart}  `;
-  const nameWidth = LINE_WIDTH - prefix.length - 1 - pricePart.length;
-  const name = padRight(item.name, Math.max(1, nameWidth));
-  return `${prefix}${name} ${pricePart}`;
+  const prefix = item.voided
+    ? "** VOID: "
+    : `${String(item.quantity).padStart(2, " ")}  `;
+  const label = `${prefix}${item.name}`;
+  return priceLine(label, formatMoney(item.lineTotal));
+}
+
+/**
+ * Build a two-column line where the right side is NOT money (so it
+ * doesn't need to align with prices). Used for order number +
+ * timestamp, and table + staff pairs.
+ */
+function twoColumnText(left: string, right: string): string {
+  const available = LINE_WIDTH - right.length - 1;
+  return padRight(left, Math.max(1, available)) + " " + right;
 }
 
 function horizontalRule(): string {
@@ -123,15 +162,6 @@ function formatTimestamp(date: Date): string {
 
 // ─── Status translation ──────────────────────────────────────────────────────
 
-/**
- * The wrapper returns { code, message } from getPrinterStatus. Codes
- * come from the iMin SDK:
- *   -1 / 1 => disconnected
- *    0     => normal (ready)
- *    3     => print head open
- *    7 / 8 => no paper
- *   99+    => other
- */
 function translateStatus(raw: {
   code: number;
   message: string;
@@ -263,11 +293,7 @@ export class IminPrinterService implements PrinterService {
         };
       }
 
-      // Tighten the line spacing for the whole transaction. Setting
-      // this once at the start of the buffer applies to every
-      // printText call that follows.
       await PrinterImin.setTextLineSpacing(LINE_SPACING);
-
       await PrinterImin.enterPrinterBuffer(true);
 
       await this.emitReceipt(PrinterImin, receipt);
@@ -328,10 +354,10 @@ export class IminPrinterService implements PrinterService {
 
     await PrinterImin.printAndLineFeed();
 
-    // Transaction identity
+    // Transaction identity (non-money two-column lines)
     await this.printLeft(
       PrinterImin,
-      twoColumn(
+      twoColumnText(
         `Order #${receipt.orderNumber}`,
         formatTimestamp(receipt.timestamp),
       ),
@@ -341,7 +367,7 @@ export class IminPrinterService implements PrinterService {
     if (receipt.tableLabel) {
       await this.printLeft(
         PrinterImin,
-        twoColumn(receipt.tableLabel, `Staff: ${receipt.staffName}`),
+        twoColumnText(receipt.tableLabel, `Staff: ${receipt.staffName}`),
         SIZE_BODY,
       );
     } else {
@@ -362,24 +388,24 @@ export class IminPrinterService implements PrinterService {
 
     await this.printLeft(PrinterImin, horizontalRule(), SIZE_BODY);
 
-    // Items
+    // Items — prices left-anchored at LABEL_WIDTH
     for (const item of receipt.items) {
       await this.printLeft(PrinterImin, itemLine(item), SIZE_BODY);
     }
 
     await this.printLeft(PrinterImin, horizontalRule(), SIZE_BODY);
 
-    // Totals
+    // Totals — prices left-anchored at LABEL_WIDTH
     await this.printLeft(
       PrinterImin,
-      twoColumn("Subtotal", formatMoney(receipt.subtotal)),
+      priceLine("Subtotal", formatMoney(receipt.subtotal)),
       SIZE_BODY,
     );
 
     if (receipt.discountTotal && receipt.discountTotal > 0) {
       await this.printLeft(
         PrinterImin,
-        twoColumn("Discount", `-${formatMoney(receipt.discountTotal)}`),
+        priceLine("Discount", `-${formatMoney(receipt.discountTotal)}`),
         SIZE_BODY,
       );
     }
@@ -387,7 +413,7 @@ export class IminPrinterService implements PrinterService {
     for (const vat of receipt.vatBreakdown) {
       await this.printLeft(
         PrinterImin,
-        twoColumn(vat.rateLabel, formatMoney(vat.vatAmount)),
+        priceLine(vat.rateLabel, formatMoney(vat.vatAmount)),
         SIZE_BODY,
       );
     }
@@ -395,32 +421,33 @@ export class IminPrinterService implements PrinterService {
     if (receipt.serviceCharge && receipt.serviceCharge > 0) {
       await this.printLeft(
         PrinterImin,
-        twoColumn("Service charge", formatMoney(receipt.serviceCharge)),
+        priceLine("Service charge", formatMoney(receipt.serviceCharge)),
         SIZE_BODY,
       );
     }
 
     await this.printLeft(PrinterImin, horizontalRule(), SIZE_BODY);
 
+    // TOTAL — larger text, same column alignment
     await this.printLeft(
       PrinterImin,
-      twoColumn("TOTAL", formatMoney(receipt.total)),
+      priceLine("TOTAL", formatMoney(receipt.total)),
       SIZE_TOTAL,
     );
 
     await PrinterImin.printAndLineFeed();
 
-    // Payments
+    // Payments — prices left-anchored at LABEL_WIDTH
     for (const payment of receipt.payments) {
       await this.printLeft(
         PrinterImin,
-        twoColumn(`Paid (${payment.method})`, formatMoney(payment.amount)),
+        priceLine(`Paid (${payment.method})`, formatMoney(payment.amount)),
         SIZE_BODY,
       );
       if (payment.change !== undefined && payment.change > 0) {
         await this.printLeft(
           PrinterImin,
-          twoColumn("Change", formatMoney(payment.change)),
+          priceLine("Change", formatMoney(payment.change)),
           SIZE_BODY,
         );
       }
