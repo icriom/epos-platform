@@ -9,6 +9,7 @@ import OrderScreen from "./src/screens/pos/OrderScreen";
 import PaymentScreen from "./src/screens/pos/PaymentScreen";
 import ReportsScreen from "./src/screens/reports/ReportsScreen";
 import ZReadScreen from "./src/screens/reports/ZReadScreen";
+import TestPrintScreen from "./src/screens/manager/TestPrintScreen";
 
 const Stack = createNativeStackNavigator();
 
@@ -30,6 +31,7 @@ export default function App() {
           <Stack.Screen name="Payment" component={PaymentScreen} />
           <Stack.Screen name="Reports" component={ReportsScreen} />
           <Stack.Screen name="ZRead" component={ZReadScreen} />
+          <Stack.Screen name="TestPrint" component={TestPrintScreen} />
         </Stack.Navigator>
       </View>
     </NavigationContainer>

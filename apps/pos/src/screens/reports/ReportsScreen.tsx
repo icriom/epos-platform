@@ -23,6 +23,14 @@ interface ReportTile {
 
 const REPORT_TILES: ReportTile[] = [
   {
+    id: "printer-test",
+    title: "Printer Test",
+    subtitle: "Verify the built-in receipt printer",
+    icon: "🖨",
+    available: true,
+    route: "TestPrint",
+  },
+  {
     id: "z-read",
     title: "Z-Read / End of Day",
     subtitle: "Sales totals, payment breakdown, VAT summary",
@@ -52,16 +60,37 @@ const REPORT_TILES: ReportTile[] = [
     available: false,
   },
   {
-    id: "void-history",
-    title: "Void & Refund History",
-    subtitle: "All voided items and refunds with reasons",
-    icon: "🗑",
+    id: "staff-management",
+    title: "Staff Management",
+    subtitle: "Add/remove staff, change PINs, roles",
+    icon: "🧑‍💼",
+    available: false,
+  },
+  {
+    id: "cash-management",
+    title: "Cash Management",
+    subtitle: "Float adjust, safe drop, pay-outs",
+    icon: "💰",
+    available: false,
+  },
+  {
+    id: "back-office",
+    title: "Back Office",
+    subtitle: "Menu, pricing, promotions, reports",
+    icon: "🏢",
+    available: false,
+  },
+  {
+    id: "venue-settings",
+    title: "Venue Settings",
+    subtitle: "Receipt header, VAT, printer setup",
+    icon: "⚙️",
     available: false,
   },
   {
     id: "audit-log",
     title: "Audit Log",
-    subtitle: "All sensitive actions — discounts, voids, overrides",
+    subtitle: "All sensitive actions \u2014 discounts, voids, overrides",
     icon: "🔒",
     available: false,
   },
@@ -129,7 +158,7 @@ export default function ReportsScreen({ navigation }: any) {
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.headerTitle}>Reports</Text>
+          <Text style={styles.headerTitle}>Manager</Text>
           {authorisedManagerName && (
             <Text style={styles.headerSub}>
               Authorised by {authorisedManagerName}
@@ -144,10 +173,7 @@ export default function ReportsScreen({ navigation }: any) {
           {REPORT_TILES.map((tile) => (
             <TouchableOpacity
               key={tile.id}
-              style={[
-                styles.tile,
-                !tile.available && styles.tileDisabled,
-              ]}
+              style={[styles.tile, !tile.available && styles.tileDisabled]}
               onPress={() => handleTilePress(tile)}
               disabled={!tile.available}
               activeOpacity={0.7}
@@ -167,7 +193,7 @@ export default function ReportsScreen({ navigation }: any) {
 
       <ManagerPinModal
         visible={pinModalVisible}
-        title="Reports Access"
+        title="Manager Access"
         subtitle="Enter a manager PIN to view reports"
         onSuccess={handlePinSuccess}
         onCancel={handlePinCancel}
